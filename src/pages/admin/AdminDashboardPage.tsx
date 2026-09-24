@@ -3,7 +3,7 @@
  * Route: /admin/dashboard
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Users,
   ShieldCheck,
@@ -25,11 +25,18 @@ import { BackendDisconnected } from '../../components/ui/BackendDisconnected';
 import { StudentFormModal } from '../../components/admin/StudentFormModal';
 import { FaceEnrollmentDrawer } from '../../components/admin/FaceEnrollmentDrawer';
 import { useAuth } from '../../context/AuthContext';
+import { dashboardService, AdminDashboardStats } from '../../services/dashboard.service';
+import { LoadingSkeleton } from '../../components/ui/LoadingSkeleton';
+import { ErrorState } from '../../components/ui/ErrorState';
 
 export const AdminDashboardPage: React.FC = () => {
   const { session } = useAuth();
   const [showStudentModal, setShowStudentModal] = useState(false);
   const [showFaceDrawer, setShowFaceDrawer] = useState(false);
+  const [stats, setStats] = useState<AdminDashboardStats | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const load = () => { setLoadError(null); dashboardService.admin().then(setStats).catch((e) => setLoadError(e.message)); };
+  useEffect(load, []);
 
   const currentDateFormatted = new Intl.DateTimeFormat('id-ID', {
     weekday: 'long',
@@ -38,12 +45,12 @@ export const AdminDashboardPage: React.FC = () => {
     year: 'numeric',
   }).format(new Date());
 
-  const kpis = [
-    { label: 'Total Siswa', value: '—', icon: Users, color: 'text-blue-600' },
-    { label: 'Wajah Terdaftar', value: '—', icon: ShieldCheck, color: 'text-teal-600' },
-    { label: 'Hadir Hari Ini', value: '—', icon: ClipboardCheck, color: 'text-emerald-600' },
-    { label: 'Perangkat Terdaftar', value: '—', icon: Cpu, color: 'text-slate-600' },
-  ];
+  const kpis = stats ? [
+    { label: 'Siswa Aktif', value: stats.activeStudents, icon: Users, color: 'text-blue-600' },
+    { label: 'Wajah Terdaftar', value: stats.facesRegistered, icon: ShieldCheck, color: 'text-teal-600' },
+    { label: 'Hadir Hari Ini', value: stats.presentToday, icon: ClipboardCheck, color: 'text-emerald-600' },
+    { label: 'Sesi Aktif', value: stats.activeSessions, icon: Cpu, color: 'text-slate-600' },
+  ] : [];
 
   const systemStatuses = [
     { name: 'Server Lokal (FastAPI)', status: 'Belum terhubung', icon: Server },
@@ -83,7 +90,8 @@ export const AdminDashboardPage: React.FC = () => {
       {/* Backend Disconnected Banner */}
       <BackendDisconnected moduleName="Dashboard Admin IT" />
 
-      {/* 4 KPI Cards (All values '—') */}
+      {loadError && <ErrorState message={loadError} onRetry={load} />}
+      {!stats && !loadError ? <LoadingSkeleton type="card" /> : <>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {kpis.map((kpi, index) => {
           const Icon = kpi.icon;
@@ -105,7 +113,7 @@ export const AdminDashboardPage: React.FC = () => {
             </div>
           );
         })}
-      </div>
+      </div></>}
 
       {/* Main Grid: Chart Container & Status Panels */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

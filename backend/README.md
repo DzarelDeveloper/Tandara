@@ -10,7 +10,7 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cp .env.example .env
 .venv/bin/python -m app.cli.create_admin
-.venv/bin/uvicorn app.full:app --reload --port 8000
+.venv/bin/uvicorn app.main:app --reload --port 8000
 ```
 
 ## Windows
@@ -21,7 +21,7 @@ py -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 copy .env.example .env
 .venv\Scripts\python -m app.cli.create_admin
-.venv\Scripts\uvicorn app.full:app --reload --port 8000
+.venv\Scripts\uvicorn app.main:app --reload --port 8000
 ```
 
 Set `VITE_API_BASE_URL=http://localhost:8000` pada `.env` frontend lalu jalankan `npm run dev`. Swagger tersedia di `/docs`.
