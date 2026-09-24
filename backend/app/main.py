@@ -143,9 +143,11 @@ from .routers.audit_logs import router as audit_logs_router
 from .routers.guardians import router as guardians_router
 from .routers.leave_requests import router as leave_requests_router
 from .routers.attendance_sessions import router as attendance_sessions_router
+from .routers.attendance import router as attendance_router
 app.include_router(dashboards_router)
 app.include_router(reports_router)
 app.include_router(audit_logs_router)
 app.include_router(guardians_router)
 app.include_router(leave_requests_router)
 app.include_router(attendance_sessions_router)
+app.include_router(attendance_router)
