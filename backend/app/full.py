@@ -14,21 +14,6 @@ class ManualIn(BaseModel): student_id:int; mode:str; reason:str=Field(min_length
 class ScanIn(BaseModel): session_id:int; student_id:int; confidence_score:float=Field(ge=0,le=1)
 class LeaveIn(BaseModel): student_id:int; leave_date:date; leave_type:str; reason:str=Field(min_length=3)
 def fail(code,msg): raise HTTPException(code,{'success':False,'message':msg,'errors':{},'code':'REQUEST_ERROR'})
-def import_result(rows, db):
-    required={'nis','nama','kelas','jurusan','nama_wali','nomor_wali'}
-    if not rows or not required.issubset(rows[0]):
-        return None, {'total_rows':len(rows),'valid_rows':0,'invalid_rows':len(rows),'rows':[],'header_error':'Kolom wajib: nis,nama,kelas,jurusan,nama_wali,nomor_wali'}
-    seen=set(); details=[]
-    for number,row in enumerate(rows,2):
-        errors=[];nis=row['nis'].strip()
-        if not nis: errors.append({'field':'nis','message':'NIS wajib diisi'})
-        elif nis in seen: errors.append({'field':'nis','message':'NIS duplikat dalam file'})
-        elif db.scalar(select(Student.id).where(Student.nis==nis)): errors.append({'field':'nis','message':'NIS sudah terdaftar'})
-        seen.add(nis)
-        if not db.scalar(select(ClassRoom.id).where(ClassRoom.name==row['kelas'].strip(),ClassRoom.major==row['jurusan'].strip())):errors.append({'field':'kelas','message':'Kelas atau jurusan tidak ditemukan'})
-        if not row['nomor_wali'].strip().startswith(('0','62','+62')):errors.append({'field':'nomor_wali','message':'Nomor telepon Indonesia tidak valid'})
-        details.append({'row_number':number,'valid':not errors,'errors':errors,'data':row})
-    return details, {'total_rows':len(rows),'valid_rows':sum(x['valid'] for x in details),'invalid_rows':sum(not x['valid'] for x in details),'rows':details}
 def take(db, student_id, mode, method, user, confidence=None, notes=None):
     s=db.get(Student,student_id)
     if not s or not s.is_active: fail(404,'Siswa aktif tidak ditemukan.')
@@ -84,74 +69,6 @@ async def correct_attendance(id:int,body:Patch,db:Session=Depends(get_db),u=Depe
     return {'success':True,'data':attendance_out(a)}
 @app.get('/api/attendance/summary')
 def summary(db:Session=Depends(get_db),u=Depends(user_dep)): return {'success':True,'data':{'today':db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date==localnow().date())) or 0,'students':db.scalar(select(func.count()).select_from(Student).where(Student.is_active==True)) or 0}}
-@app.get('/api/dashboard/admin')
-def admin_dashboard(db:Session=Depends(get_db),u=Depends(require('ADMIN_IT'))):
-    today=localnow().date()
-    return {'success':True,'data':{
-      'activeStudents':db.scalar(select(func.count()).select_from(Student).where(Student.is_active==True)) or 0,
-      'activeClasses':db.scalar(select(func.count()).select_from(ClassRoom).where(ClassRoom.is_active==True)) or 0,
-      'activeDutyTeachers':db.scalar(select(func.count()).select_from(User).where(User.role=='GURU_PIKET',User.is_active==True)) or 0,
-      'facesRegistered':db.scalar(select(func.count()).select_from(Student).where(Student.is_active==True,Student.face_enrollment_status=='REGISTERED')) or 0,
-      'facesUnregistered':db.scalar(select(func.count()).select_from(Student).where(Student.is_active==True,Student.face_enrollment_status!='REGISTERED')) or 0,
-      'presentToday':db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date==today,Attendance.status.in_(['PRESENT','LATE']))) or 0,
-      'lateToday':db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date==today,Attendance.status=='LATE')) or 0,
-      'pendingLeaves':db.scalar(select(func.count()).select_from(LeaveRequest).where(LeaveRequest.status=='PENDING')) or 0,
-      'activeSessions':db.scalar(select(func.count()).select_from(AttendanceSession).where(AttendanceSession.status=='ACTIVE')) or 0,
-    }}
-@app.get('/api/dashboard/teacher')
-def teacher_dashboard(db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
-    today=localnow().date(); students=db.scalar(select(func.count()).select_from(Student).where(Student.is_active==True)) or 0
-    records=db.scalars(select(Attendance).where(Attendance.attendance_date==today).order_by(Attendance.updated_at.desc()).limit(10)).all()
-    active=db.scalar(select(AttendanceSession).where(AttendanceSession.status=='ACTIVE').order_by(AttendanceSession.opened_at.desc()))
-    present=sum(r.status in ('PRESENT','LATE') for r in records)
-    return {'success':True,'data':{'session':None if not active else {'id':str(active.id),'mode':active.mode,'cameraSource':active.camera_source,'status':active.status},'presentToday':db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date==today,Attendance.status.in_(['PRESENT','LATE']))) or 0,'lateToday':db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date==today,Attendance.status=='LATE')) or 0,'excusedToday':db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date==today,Attendance.status.in_(['SICK','EXCUSED']))) or 0,'notPresent':max(0,students-(db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date==today)) or 0)),'recentAttendance':[attendance_out(x) for x in records],'faceEngine':'NOT_CONFIGURED'}}
-@app.get('/api/reports/attendance.csv')
-def attendance_csv(date_from:date|None=None,date_to:date|None=None,class_id:int|None=None,student_id:int|None=None,status:str|None=None,db:Session=Depends(get_db),u=Depends(user_dep)):
-    q=select(Attendance).join(Student).order_by(Attendance.attendance_date.desc())
-    if date_from:q=q.where(Attendance.attendance_date>=date_from)
-    if date_to:q=q.where(Attendance.attendance_date<=date_to)
-    if class_id:q=q.where(Student.class_id==class_id)
-    if student_id:q=q.where(Attendance.student_id==student_id)
-    if status:q=q.where(Attendance.status==status)
-    out=io.StringIO();writer=csv.writer(out);writer.writerow(['Tanggal','NIS','Nama','Kelas','Jam Masuk','Jam Pulang','Status','Metode Masuk','Metode Pulang','Catatan'])
-    for a in db.scalars(q):writer.writerow([a.attendance_date,a.student.nis,a.student.full_name,a.student.classroom.name,a.check_in_time.isoformat() if a.check_in_time else '',a.check_out_time.isoformat() if a.check_out_time else '',a.status,a.check_in_method or '',a.check_out_method or '',a.notes or ''])
-    filename=f'tandara-laporan-{localnow().date().isoformat()}.csv'
-    return StreamingResponse(iter([out.getvalue()]),media_type='text/csv; charset=utf-8',headers={'Content-Disposition':f'attachment; filename="{filename}"'})
-@app.get('/api/students/import-template.csv')
-def import_template(u=Depends(require('ADMIN_IT'))):
-    return StreamingResponse(iter(['nis,nama,kelas,jurusan,nama_wali,nomor_wali\n']),media_type='text/csv',headers={'Content-Disposition':'attachment; filename="tandara-template-siswa.csv"'})
-@app.post('/api/students/import/preview')
-async def import_preview(file:UploadFile=File(...),db:Session=Depends(get_db),u=Depends(require('ADMIN_IT'))):
-    if not file.filename or not file.filename.lower().endswith('.csv'):fail(415,'File harus CSV.')
-    raw=await file.read()
-    if len(raw)>settings.max_upload_mb*1024*1024:fail(413,'Ukuran file melebihi batas.')
-    try: rows=list(csv.DictReader(io.StringIO(raw.decode('utf-8-sig'))))
-    except UnicodeDecodeError:fail(422,'CSV harus UTF-8.')
-    _, result=import_result(rows,db)
-    if 'header_error' in result:error(422,result['header_error'],'IMPORT_HEADER_ERROR')
-    return {'success':True,'data':result}
-@app.post('/api/students/import')
-async def import_students(file:UploadFile=File(...),db:Session=Depends(get_db),u=Depends(require('ADMIN_IT'))):
-    if not file.filename or not file.filename.lower().endswith('.csv'):fail(415,'File harus CSV.')
-    raw=await file.read()
-    if len(raw)>settings.max_upload_mb*1024*1024:fail(413,'Ukuran file melebihi batas.')
-    try: rows=list(csv.DictReader(io.StringIO(raw.decode('utf-8-sig'))))
-    except UnicodeDecodeError:fail(422,'CSV harus UTF-8.')
-    details,result=import_result(rows,db)
-    if details is None:error(422,result['header_error'],'IMPORT_HEADER_ERROR')
-    if result['invalid_rows']:raise HTTPException(422,{'success':False,'message':'Validasi impor gagal.','errors':result,'code':'IMPORT_VALIDATION_ERROR'})
-    prepared=[]
-    for n,row in enumerate(rows,2):
-      nis=row['nis'].strip(); classroom=db.scalar(select(ClassRoom).where(ClassRoom.name==row['kelas'].strip(),ClassRoom.major==row['jurusan'].strip()))
-      prepared.append((nis,row,classroom))
-    try:
-      for nis,row,classroom in prepared:
-        guardian=Guardian(full_name=row['nama_wali'].strip(),phone_number=row['nomor_wali'].strip());db.add(guardian);db.flush()
-        db.add(Student(nis=nis,full_name=row['nama'].strip(),class_id=classroom.id,guardian_id=guardian.id))
-      audit(db,u,'IMPORT','Student',None,f'Mengimpor {len(prepared)} siswa');db.commit()
-    except Exception:
-      db.rollback();raise
-    return {'success':True,'data':{'importedCount':len(prepared)}}
 @app.post('/api/leave-requests')
 def leave(body:LeaveIn,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
     x=LeaveRequest(**body.model_dump(),submitted_by=u.id);db.add(x);db.flush();audit(db,u,'CREATE','LeaveRequest',x.id,'Membuat izin');db.commit();return {'success':True,'data':{'id':str(x.id)}}
@@ -169,10 +86,6 @@ def reject(id:int,body:dict,db:Session=Depends(get_db),u=Depends(require('ADMIN_
     if not x or x.status!='PENDING':fail(404,'Izin pending tidak ditemukan.')
     if not reason or len(reason)<3:fail(422,'Alasan penolakan wajib diisi.')
     x.status='REJECTED';x.reviewed_by=u.id;x.reviewed_at=localnow();x.review_note=reason;audit(db,u,'REJECT','LeaveRequest',id,reason);db.commit();return {'success':True}
-@app.get('/api/audit-logs')
-def audit_logs(db:Session=Depends(get_db),u=Depends(require('ADMIN_IT'))):
-    rows=db.scalars(select(AuditLog).order_by(AuditLog.created_at.desc())).all()
-    return {'success':True,'data':[{'id':str(x.id),'timestamp':x.created_at.isoformat(),'userId':str(x.user_id or ''),'username':'','action':x.action,'entity':x.entity_type,'entityId':x.entity_id,'details':x.description} for x in rows]}
 @app.websocket('/ws/attendance')
 async def websocket(ws:WebSocket):
     token=ws.query_params.get('token')

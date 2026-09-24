@@ -63,6 +63,8 @@ app.add_middleware(CORSMiddleware,allow_origins=[x.strip() for x in settings.fro
 async def http_error(_,e):
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=e.status_code,content=e.detail if isinstance(e.detail,dict) else {'success':False,'message':str(e.detail),'errors':{},'code':'HTTP_ERROR'})
+from .routers.imports import router as imports_router
+app.include_router(imports_router)
 @app.get('/api/health')
 def health(): return {'success':True,'message':'Backend Tandara aktif','data':{'face_recognition':'NOT_CONFIGURED'}}
 @app.post('/api/auth/login')
@@ -166,3 +168,9 @@ def delete_student(id:int,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT
 # Register attendance, leave, and WebSocket routes in the default ASGI app too.
 # This keeps `uvicorn app.main:app` and the test entrypoint behaviour identical.
 from . import full as _full
+from .routers.dashboards import router as dashboards_router
+from .routers.reports import router as reports_router
+from .routers.audit_logs import router as audit_logs_router
+app.include_router(dashboards_router)
+app.include_router(reports_router)
+app.include_router(audit_logs_router)
