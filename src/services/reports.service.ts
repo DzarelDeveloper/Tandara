@@ -19,9 +19,7 @@ export interface ReportFilterParams {
 
 export const reportsService = {
   async getAuditLogs(): Promise<AuditLog[]> {
-    // When backend is connected:
-    // return await apiRequest<AuditLog[]>('/api/v1/reports/audit-logs');
-    return [];
+    return apiRequest<AuditLog[]>('/api/audit-logs');
   },
 
   async triggerExport(format: 'pdf' | 'excel', filters?: ReportFilterParams): Promise<Blob> {

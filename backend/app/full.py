@@ -1,9 +1,11 @@
 """MVP route extension. Run with: uvicorn app.full:app --reload"""
-from datetime import date
+from datetime import date, datetime
 from fastapi import Depends, HTTPException, WebSocket, WebSocketDisconnect
+import jwt
+from .config import settings
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
-from .main import app, get_db, user_dep, require, localnow, audit, AttendanceSession, Attendance, LeaveRequest, Student, User, attendance_out, clients, broadcast
+from .main import app, get_db, user_dep, require, localnow, audit, AttendanceSession, Attendance, LeaveRequest, Student, User, attendance_out, clients, broadcast, Patch, AuditLog
 from pydantic import BaseModel, Field
 
 class SessionIn(BaseModel): mode:str; camera_source:str='0'
@@ -48,7 +50,22 @@ async def scan(body:ScanIn,db:Session=Depends(get_db),u=Depends(require('ADMIN_I
     if not sess or sess.status!='ACTIVE':fail(422,'Sesi absensi tidak aktif.')
     a=take(db,body.student_id,sess.mode,'FACE',u,body.confidence_score);audit(db,u,'SCAN','Attendance',a.id,'Absensi wajah');db.commit();await broadcast('ATTENDANCE_SUCCESS',{'student_id':a.student_id,'student_name':a.student.full_name,'mode':sess.mode,'confidence':body.confidence_score});return {'success':True,'data':attendance_out(a)}
 @app.get('/api/attendance')
-def attendance(db:Session=Depends(get_db),u=Depends(user_dep)): return {'success':True,'data':[attendance_out(a) for a in db.scalars(select(Attendance).order_by(Attendance.attendance_date.desc())).all()]}
+def attendance(today:bool=False, date_from:date|None=None, date_to:date|None=None, status:str|None=None, db:Session=Depends(get_db),u=Depends(user_dep)):
+    query=select(Attendance).order_by(Attendance.attendance_date.desc())
+    if today: query=query.where(Attendance.attendance_date==localnow().date())
+    if date_from: query=query.where(Attendance.attendance_date>=date_from)
+    if date_to: query=query.where(Attendance.attendance_date<=date_to)
+    if status: query=query.where(Attendance.status==status)
+    return {'success':True,'data':[attendance_out(a) for a in db.scalars(query).all()]}
+@app.patch('/api/attendance/{id}/correction')
+async def correct_attendance(id:int,body:Patch,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
+    a=db.get(Attendance,id)
+    if not a: fail(404,'Rekam presensi tidak ditemukan.')
+    if not body.status or not body.notes: fail(422,'Status dan alasan koreksi wajib diisi.')
+    if body.status not in ('PRESENT','LATE','SICK','EXCUSED','UNEXCUSED'): fail(422,'Status presensi tidak valid.')
+    a.status=body.status;a.notes=body.notes;a.check_in_time=body.check_in_time or a.check_in_time;a.check_out_time=body.check_out_time or a.check_out_time;a.updated_by=u.id
+    audit(db,u,'CORRECT','Attendance',a.id,body.notes);db.commit();await broadcast('ATTENDANCE_CORRECTED',{'attendance_id':a.id,'student_id':a.student_id,'status':a.status})
+    return {'success':True,'data':attendance_out(a)}
 @app.get('/api/attendance/summary')
 def summary(db:Session=Depends(get_db),u=Depends(user_dep)): return {'success':True,'data':{'today':db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date==localnow().date())) or 0,'students':db.scalar(select(func.count()).select_from(Student).where(Student.is_active==True)) or 0}}
 @app.post('/api/leave-requests')
@@ -61,8 +78,23 @@ def approve(id:int,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU
     x=db.get(LeaveRequest,id)
     if not x or x.status!='PENDING':fail(404,'Izin pending tidak ditemukan.')
     x.status='APPROVED';x.reviewed_by=u.id;x.reviewed_at=localnow();a=db.scalar(select(Attendance).where(Attendance.student_id==x.student_id,Attendance.attendance_date==x.leave_date)) or Attendance(student_id=x.student_id,attendance_date=x.leave_date,created_by=u.id);db.add(a);a.status='SICK' if x.leave_type=='SICK' else 'EXCUSED';a.notes=x.reason;audit(db,u,'APPROVE','LeaveRequest',id,'Izin disetujui');db.commit();return {'success':True}
+@app.post('/api/leave-requests/{id}/reject')
+def reject(id:int,body:dict,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
+    x=db.get(LeaveRequest,id)
+    reason=body.get('rejectionReason')
+    if not x or x.status!='PENDING':fail(404,'Izin pending tidak ditemukan.')
+    if not reason or len(reason)<3:fail(422,'Alasan penolakan wajib diisi.')
+    x.status='REJECTED';x.reviewed_by=u.id;x.reviewed_at=localnow();x.review_note=reason;audit(db,u,'REJECT','LeaveRequest',id,reason);db.commit();return {'success':True}
+@app.get('/api/audit-logs')
+def audit_logs(db:Session=Depends(get_db),u=Depends(require('ADMIN_IT'))):
+    rows=db.scalars(select(AuditLog).order_by(AuditLog.created_at.desc())).all()
+    return {'success':True,'data':[{'id':str(x.id),'timestamp':x.created_at.isoformat(),'userId':str(x.user_id or ''),'username':'','action':x.action,'entity':x.entity_type,'entityId':x.entity_id,'details':x.description} for x in rows]}
 @app.websocket('/ws/attendance')
 async def websocket(ws:WebSocket):
+    token=ws.query_params.get('token')
+    try: jwt.decode(token or '',settings.secret_key,algorithms=['HS256'])
+    except Exception:
+        await ws.close(code=1008);return
     await ws.accept();clients.add(ws)
     try:
         while True: await ws.receive_text()

@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     app_name: str = 'Kena Scan Tandara'
     secret_key: str = 'development-only-change-me'
     access_token_expire_minutes: int = 480
-    database_url: str = 'sqlite:///./data/kena_scan.db'
+    database_url: str = f'sqlite:///{BASE_DIR / "data" / "kena_scan.db"}'
     frontend_origin: str = 'http://localhost:3000,http://localhost:5173'
     timezone: str = 'Asia/Jakarta'
     camera_source: str = '0'

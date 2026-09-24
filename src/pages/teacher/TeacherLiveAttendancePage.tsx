@@ -3,7 +3,7 @@
  * Route: /teacher/live-attendance
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Video,
   Play,
@@ -23,6 +23,7 @@ import { BackendDisconnected } from '../../components/ui/BackendDisconnected';
 import { StartSessionModal } from '../../components/teacher/StartSessionModal';
 import { useToast } from '../../context/ToastContext';
 import { AttendanceEvent } from '../../types';
+import { attendanceService } from '../../services/attendance.service';
 
 export const TeacherLiveAttendancePage: React.FC = () => {
   const { showBackendNotConnected } = useToast();
@@ -30,6 +31,19 @@ export const TeacherLiveAttendancePage: React.FC = () => {
   const [activeMode, setActiveMode] = useState<'CHECK_IN' | 'CHECK_OUT'>('CHECK_IN');
   const [cameraSource, setCameraSource] = useState('cam-1');
   const [classFilter, setClassFilter] = useState('');
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [recentDetections, setRecentDetections] = useState<AttendanceEvent[]>([]);
+
+  useEffect(() => attendanceService.subscribe((message) => {
+    if (message.event !== 'ATTENDANCE_SUCCESS') return;
+    const data = message.data;
+    setRecentDetections((current) => [{
+      id: `${data.student_id}-${message.timestamp}`, studentId: String(data.student_id),
+      studentName: String(data.student_name ?? ''), nis: '', className: '',
+      eventType: data.mode as 'CHECK_IN' | 'CHECK_OUT', timestamp: message.timestamp,
+      cameraSource, confidenceScore: typeof data.confidence === 'number' ? data.confidence : undefined,
+    }, ...current].slice(0, 50));
+  }), [cameraSource]);
 
   // Table columns for recent detections
   const columns: Column<AttendanceEvent>[] = [
@@ -62,9 +76,6 @@ export const TeacherLiveAttendancePage: React.FC = () => {
       ),
     },
   ];
-
-  // No fake detection rows
-  const recentDetections: AttendanceEvent[] = [];
 
   const handleDisabledAction = (actionName: string) => {
     showBackendNotConnected(`Sesi belum aktif. ${actionName} memerlukan sesi absensi yang sedang berjalan.`);
@@ -109,9 +120,9 @@ export const TeacherLiveAttendancePage: React.FC = () => {
             </button>
             <button
               type="button"
-              disabled={true}
-              onClick={() => handleDisabledAction('Tutup Sesi')}
-              className="inline-flex items-center gap-2 px-3 py-2 text-xs sm:text-sm font-medium text-slate-400 bg-slate-100 rounded-lg cursor-not-allowed border border-slate-200"
+              disabled={!sessionId}
+              onClick={async () => { if (sessionId) { await attendanceService.stopLiveSession(sessionId); setSessionId(null); } }}
+              className={`inline-flex items-center gap-2 px-3 py-2 text-xs sm:text-sm font-medium rounded-lg border border-slate-200 ${sessionId ? 'text-red-700 bg-red-50 hover:bg-red-100' : 'text-slate-400 bg-slate-100 cursor-not-allowed'}`}
             >
               <StopCircle className="w-4 h-4" />
               Tutup Sesi
@@ -128,7 +139,7 @@ export const TeacherLiveAttendancePage: React.FC = () => {
         <div className="flex items-center gap-2.5">
           <span className="text-xs font-medium uppercase tracking-wider text-slate-500">Status Sesi:</span>
           <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-800 border border-amber-200">
-            Belum Aktif
+            {sessionId ? 'Aktif' : 'Belum Aktif'}
           </span>
         </div>
 
@@ -292,7 +303,7 @@ export const TeacherLiveAttendancePage: React.FC = () => {
       </div>
 
       {/* Start Session Modal */}
-      <StartSessionModal isOpen={showSessionModal} onClose={() => setShowSessionModal(false)} />
+      <StartSessionModal isOpen={showSessionModal} onClose={() => setShowSessionModal(false)} onStarted={(id, mode, source) => { setSessionId(id); setActiveMode(mode); setCameraSource(source); }} />
     </div>
   );
 };

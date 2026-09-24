@@ -11,21 +11,19 @@ import { apiRequest } from './api';
 
 export const leaveService = {
   async getLeaveRequests(status?: LeaveStatus): Promise<LeaveRequest[]> {
-    // When backend is connected:
-    // const query = status ? `?status=${status}` : '';
-    // return await apiRequest<LeaveRequest[]>(`/api/v1/leave-requests${query}`);
-    return [];
+    const requests = await apiRequest<LeaveRequest[]>('/api/leave-requests');
+    return status ? requests.filter((request) => request.status === status) : requests;
   },
 
   async approveRequest(id: string, notes?: string): Promise<void> {
-    await apiRequest(`/api/v1/leave-requests/${id}/approve`, {
+    await apiRequest(`/api/leave-requests/${id}/approve`, {
       method: 'POST',
       body: JSON.stringify({ notes }),
     });
   },
 
   async rejectRequest(id: string, rejectionReason: string): Promise<void> {
-    await apiRequest(`/api/v1/leave-requests/${id}/reject`, {
+    await apiRequest(`/api/leave-requests/${id}/reject`, {
       method: 'POST',
       body: JSON.stringify({ rejectionReason }),
     });

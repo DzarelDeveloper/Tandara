@@ -11,7 +11,7 @@ interface AuthContextType {
   session: AuthSession | null;
   isLoading: boolean;
   login: (params: LoginParams) => Promise<AuthSession>;
-  logout: () => void;
+  logout: () => Promise<void>;
   isAdmin: boolean;
   isTeacher: boolean;
 }
@@ -35,8 +35,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return newSession;
   };
 
-  const logout = () => {
-    authService.logout();
+  const logout = async () => {
+    await authService.logout();
     setSession(null);
   };
 

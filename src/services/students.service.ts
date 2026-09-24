@@ -27,31 +27,24 @@ export const studentsService = {
    * Fetch students list. Returns empty array in prototype when backend is offline.
    */
   async getStudents(): Promise<Student[]> {
-    // When backend is connected, use:
-    // return await apiRequest<Student[]>('/api/v1/students');
-    return [];
+    return apiRequest<Student[]>('/api/students');
   },
 
   async getStudentById(id: string): Promise<Student | null> {
     try {
-      return await apiRequest<Student>(`/api/v1/students/${id}`);
+      return await apiRequest<Student>(`/api/students/${id}`);
     } catch {
       return null;
     }
   },
 
   async createStudent(payload: CreateStudentPayload): Promise<Student> {
-    return await apiRequest<Student>('/api/v1/students', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+    throw new Error('Pilih kelas dan wali melalui formulir administrasi; kontrak siswa belum mendukung pembuatan gabungan.');
   },
 
   async enrollFace(studentId: string, faceEmbeddings: number[][]): Promise<{ success: boolean }> {
-    return await apiRequest<{ success: boolean }>(`/api/v1/students/${studentId}/enroll-face`, {
-      method: 'POST',
-      body: JSON.stringify({ embeddings: faceEmbeddings }),
-    });
+    void studentId; void faceEmbeddings;
+    throw new Error('Enrolmen wajah harus diproses oleh layanan biometrik tepercaya; endpoint tidak menerima embedding dari browser.');
   },
 
   async importStudents(file: File): Promise<{ importedCount: number }> {

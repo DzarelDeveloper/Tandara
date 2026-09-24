@@ -7,13 +7,15 @@ import React, { useState } from 'react';
 import { Modal } from '../ui/Modal';
 import { useToast } from '../../context/ToastContext';
 import { Video, LogIn, LogOut, Camera } from 'lucide-react';
+import { attendanceService } from '../../services/attendance.service';
 
 interface StartSessionModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onStarted?: (sessionId: string, mode: 'CHECK_IN' | 'CHECK_OUT', cameraSource: string) => void;
 }
 
-export const StartSessionModal: React.FC<StartSessionModalProps> = ({ isOpen, onClose }) => {
+export const StartSessionModal: React.FC<StartSessionModalProps> = ({ isOpen, onClose, onStarted }) => {
   const { showBackendNotConnected } = useToast();
   const [mode, setMode] = useState<'CHECK_IN' | 'CHECK_OUT'>('CHECK_IN');
   const [cameraSource, setCameraSource] = useState('droidcam_gate_1');
@@ -23,12 +25,13 @@ export const StartSessionModal: React.FC<StartSessionModalProps> = ({ isOpen, on
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    setIsSubmitting(false);
-    showBackendNotConnected(
-      'Backend belum terhubung dan kamera belum aktif. Sesi absensi belum dapat dimulai.'
-    );
-    onClose();
+    try {
+      const session = await attendanceService.startLiveSession({ mode, cameraSource, classFilter });
+      onStarted?.(session.sessionId, mode, cameraSource);
+      onClose();
+    } catch (error) {
+      showBackendNotConnected(error instanceof Error ? error.message : 'Sesi belum dapat dimulai.');
+    } finally { setIsSubmitting(false); }
   };
 
   return (

@@ -32,15 +32,13 @@ export interface AttendanceSchedulePayload {
 
 export const classesService = {
   async getClasses(): Promise<Class[]> {
-    // When backend is connected, use:
-    // return await apiRequest<Class[]>('/api/v1/classes');
-    return [];
+    return apiRequest<Class[]>('/api/classes');
   },
 
   async createClass(payload: CreateClassPayload): Promise<Class> {
-    return await apiRequest<Class>('/api/v1/classes', {
+    return await apiRequest<Class>('/api/classes', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, school_year: new Date().getFullYear().toString() }),
     });
   },
 

@@ -7,22 +7,9 @@
  */
 
 import { AuthSession, Role } from '../types';
+import { ACCESS_TOKEN_KEY, apiRequest } from './api';
 
 const SESSION_STORAGE_KEY = 'tandara_session_v1';
-
-// Permitted mock development accounts
-const MOCK_CREDENTIALS = {
-  admin: {
-    password: 'admin123',
-    role: 'ADMIN_IT' as Role,
-    displayName: 'Dzarel Admin',
-  },
-  guru: {
-    password: 'guru123',
-    role: 'TEACHER' as Role,
-    displayName: 'Siti Nurhaliza',
-  },
-};
 
 export interface LoginParams {
   username: string;
@@ -30,24 +17,16 @@ export interface LoginParams {
 }
 
 export const authService = {
-  /**
-   * Authenticate using the two mock prototype accounts
-   */
   async login({ username, password }: LoginParams): Promise<AuthSession> {
-    // Artificial small delay for realistic UX transition
-    await new Promise((resolve) => setTimeout(resolve, 600));
-
-    const cleanUsername = username.trim().toLowerCase();
-    const account = MOCK_CREDENTIALS[cleanUsername as keyof typeof MOCK_CREDENTIALS];
-
-    if (!account || account.password !== password) {
-      throw new Error('Username atau password tidak sesuai.');
-    }
+    const result = await apiRequest<{ access_token: string; user: { username: string; displayName: string; role: Role | 'GURU_PIKET' } }>('/api/auth/login', {
+      method: 'POST', body: JSON.stringify({ username, password }),
+    });
+    localStorage.setItem(ACCESS_TOKEN_KEY, result.access_token);
 
     const session: AuthSession = {
-      username: cleanUsername,
-      displayName: account.displayName,
-      role: account.role,
+      username: result.user.username,
+      displayName: result.user.displayName,
+      role: result.user.role === 'GURU_PIKET' ? 'TEACHER' : result.user.role,
       isAuthenticated: true,
     };
 
@@ -73,10 +52,10 @@ export const authService = {
     }
   },
 
-  /**
-   * Terminate mock session
-   */
-  logout(): void {
-    localStorage.removeItem(SESSION_STORAGE_KEY);
+  async logout(): Promise<void> {
+    try { await apiRequest('/api/auth/logout', { method: 'POST' }); } finally {
+      localStorage.removeItem(ACCESS_TOKEN_KEY);
+      localStorage.removeItem(SESSION_STORAGE_KEY);
+    }
   },
 };

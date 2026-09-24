@@ -136,3 +136,7 @@ def delete_student(id:int,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT
     x=db.get(Student,id)
     if not x:error(404,'Siswa tidak ditemukan.','NOT_FOUND')
     x.is_active=False;audit(db,u,'DEACTIVATE','Student',id,'Menonaktifkan siswa');db.commit();return {'success':True}
+
+# Register attendance, leave, and WebSocket routes in the default ASGI app too.
+# This keeps `uvicorn app.main:app` and the test entrypoint behaviour identical.
+from . import full as _full

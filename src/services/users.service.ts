@@ -19,22 +19,19 @@ export interface CreateTeacherUserPayload {
 
 export const usersService = {
   async getUsers(): Promise<User[]> {
-    // When backend is connected, use:
-    // return await apiRequest<User[]>('/api/v1/users');
-    return [];
+    return apiRequest<User[]>('/api/users');
   },
 
   async createUser(payload: CreateTeacherUserPayload): Promise<User> {
-    return await apiRequest<User>('/api/v1/users', {
+    return await apiRequest<User>('/api/users', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, role: 'GURU_PIKET' }),
     });
   },
 
   async toggleUserStatus(userId: string, isActive: boolean): Promise<void> {
-    await apiRequest(`/api/v1/users/${userId}/status`, {
+    await apiRequest(`/api/users/${userId}/status?active=${isActive}`, {
       method: 'PATCH',
-      body: JSON.stringify({ isActive }),
     });
   },
 };

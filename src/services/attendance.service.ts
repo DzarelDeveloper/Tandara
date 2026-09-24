@@ -10,7 +10,7 @@
  */
 
 import { AttendanceRecord, AttendanceType } from '../types';
-import { apiRequest } from './api';
+import { ACCESS_TOKEN_KEY, API_BASE_URL, apiRequest } from './api';
 
 export interface StartSessionPayload {
   mode: AttendanceType;
@@ -27,41 +27,42 @@ export interface AttendanceCorrectionPayload {
 }
 
 export const attendanceService = {
+  subscribe(onEvent: (event: { event: string; timestamp: string; data: Record<string, unknown> }) => void): () => void {
+    const token = localStorage.getItem(ACCESS_TOKEN_KEY);
+    const endpoint = API_BASE_URL.replace(/^http/, 'ws') + `/ws/attendance${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+    const socket = new WebSocket(endpoint);
+    socket.onmessage = ({ data }) => onEvent(JSON.parse(data));
+    return () => socket.close();
+  },
   async getTodayAttendance(): Promise<AttendanceRecord[]> {
-    // When backend is connected:
-    // return await apiRequest<AttendanceRecord[]>('/api/v1/attendance/today');
-    return [];
+    return apiRequest<AttendanceRecord[]>('/api/attendance?today=true');
   },
 
   async getAttendanceRecords(filters?: Record<string, string>): Promise<AttendanceRecord[]> {
     const params = new URLSearchParams(filters);
-    // return await apiRequest<AttendanceRecord[]>(`/api/v1/attendance/records?${params.toString()}`);
-    return [];
+    return apiRequest<AttendanceRecord[]>(`/api/attendance?${params.toString()}`);
   },
 
   async startLiveSession(payload: StartSessionPayload): Promise<{ sessionId: string; status: string }> {
-    return await apiRequest('/api/v1/attendance/session/start', {
+    const data = await apiRequest<{ id: string; status: string }>('/api/attendance-sessions/open', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ mode: payload.mode, camera_source: payload.cameraSource }),
     });
+    return { sessionId: data.id, status: data.status };
   },
 
   async stopLiveSession(sessionId: string): Promise<void> {
-    await apiRequest('/api/v1/attendance/session/stop', {
-      method: 'POST',
-      body: JSON.stringify({ sessionId }),
-    });
+    await apiRequest(`/api/attendance-sessions/${sessionId}/close`, { method: 'POST' });
   },
 
   async submitCorrection(payload: AttendanceCorrectionPayload): Promise<void> {
-    await apiRequest(`/api/v1/attendance/records/${payload.recordId}/correction`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
+    await apiRequest(`/api/attendance/${payload.recordId}/correction`, {
+      method: 'PATCH', body: JSON.stringify({ status: payload.newStatus, notes: payload.reason, check_in_time: payload.checkInTime, check_out_time: payload.checkOutTime }),
     });
   },
 
   async sendParentReminders(): Promise<{ sentCount: number }> {
-    return await apiRequest('/api/v1/attendance/reminders/send', {
+    return await apiRequest('/api/attendance/reminders/send', {
       method: 'POST',
     });
   },
