@@ -28,20 +28,6 @@ def take(db, student_id, mode, method, user, confidence=None, notes=None):
         a.check_out_time=localnow();a.check_out_method=method
     else: fail(422,'Mode absensi tidak valid.')
     a.confidence_score=confidence or a.confidence_score;a.notes=notes or a.notes;a.updated_by=user.id;db.flush();return a
-@app.post('/api/attendance-sessions/open')
-async def open_session(body:SessionIn,db:Session=Depends(get_db),u:User=Depends(require('ADMIN_IT','GURU_PIKET'))):
-    if body.mode not in ('CHECK_IN','CHECK_OUT'):fail(422,'Mode harus CHECK_IN atau CHECK_OUT.')
-    if db.scalar(select(AttendanceSession).where(AttendanceSession.status=='ACTIVE',AttendanceSession.mode==body.mode,AttendanceSession.camera_source==body.camera_source)):fail(409,'Sesi aktif untuk mode dan kamera ini sudah ada.')
-    x=AttendanceSession(mode=body.mode,camera_source=body.camera_source,opened_by=u.id);db.add(x);db.flush();audit(db,u,'OPEN','AttendanceSession',x.id,'Membuka sesi');db.commit();await broadcast('SESSION_OPENED',{'session_id':x.id,'mode':x.mode});return {'success':True,'data':{'id':str(x.id),'mode':x.mode,'status':x.status}}
-@app.get('/api/attendance-sessions/active')
-def active_session(db:Session=Depends(get_db),u=Depends(user_dep)):
-    x=db.scalar(select(AttendanceSession).where(AttendanceSession.status=='ACTIVE').order_by(AttendanceSession.opened_at.desc()))
-    return {'success':True,'data':None if not x else {'id':str(x.id),'mode':x.mode,'status':x.status,'cameraSource':x.camera_source,'openedAt':x.opened_at.isoformat()}}
-@app.post('/api/attendance-sessions/{id}/close')
-async def close_session(id:int,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
-    x=db.get(AttendanceSession,id)
-    if not x or x.status!='ACTIVE':fail(404,'Sesi aktif tidak ditemukan.')
-    x.status='CLOSED';x.closed_at=localnow();audit(db,u,'CLOSE','AttendanceSession',id,'Menutup sesi');db.commit();await broadcast('SESSION_CLOSED',{'session_id':id});return {'success':True}
 @app.post('/api/attendance/manual')
 async def manual(body:ManualIn,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
     a=take(db,body.student_id,body.mode,'MANUAL',u,notes=body.reason);audit(db,u,'MANUAL_ATTENDANCE','Attendance',a.id,body.reason);db.commit();await broadcast('ATTENDANCE_SUCCESS',{'student_id':a.student_id,'student_name':a.student.full_name,'mode':body.mode,'confidence':None});return {'success':True,'data':attendance_out(a)}
@@ -69,23 +55,6 @@ async def correct_attendance(id:int,body:Patch,db:Session=Depends(get_db),u=Depe
     return {'success':True,'data':attendance_out(a)}
 @app.get('/api/attendance/summary')
 def summary(db:Session=Depends(get_db),u=Depends(user_dep)): return {'success':True,'data':{'today':db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date==localnow().date())) or 0,'students':db.scalar(select(func.count()).select_from(Student).where(Student.is_active==True)) or 0}}
-@app.post('/api/leave-requests')
-def leave(body:LeaveIn,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
-    x=LeaveRequest(**body.model_dump(),submitted_by=u.id);db.add(x);db.flush();audit(db,u,'CREATE','LeaveRequest',x.id,'Membuat izin');db.commit();return {'success':True,'data':{'id':str(x.id)}}
-@app.get('/api/leave-requests')
-def leaves(db:Session=Depends(get_db),u=Depends(user_dep)): return {'success':True,'data':[{'id':str(x.id),'studentId':str(x.student_id),'studentName':x.student.full_name,'leaveType':x.leave_type,'startDate':x.leave_date.isoformat(),'endDate':x.leave_date.isoformat(),'reason':x.reason,'status':x.status,'createdAt':x.created_at.isoformat()} for x in db.scalars(select(LeaveRequest)).all()]}
-@app.post('/api/leave-requests/{id}/approve')
-def approve(id:int,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
-    x=db.get(LeaveRequest,id)
-    if not x or x.status!='PENDING':fail(404,'Izin pending tidak ditemukan.')
-    x.status='APPROVED';x.reviewed_by=u.id;x.reviewed_at=localnow();a=db.scalar(select(Attendance).where(Attendance.student_id==x.student_id,Attendance.attendance_date==x.leave_date)) or Attendance(student_id=x.student_id,attendance_date=x.leave_date,created_by=u.id);db.add(a);a.status='SICK' if x.leave_type=='SICK' else 'EXCUSED';a.notes=x.reason;audit(db,u,'APPROVE','LeaveRequest',id,'Izin disetujui');db.commit();return {'success':True}
-@app.post('/api/leave-requests/{id}/reject')
-def reject(id:int,body:dict,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
-    x=db.get(LeaveRequest,id)
-    reason=body.get('rejectionReason')
-    if not x or x.status!='PENDING':fail(404,'Izin pending tidak ditemukan.')
-    if not reason or len(reason)<3:fail(422,'Alasan penolakan wajib diisi.')
-    x.status='REJECTED';x.reviewed_by=u.id;x.reviewed_at=localnow();x.review_note=reason;audit(db,u,'REJECT','LeaveRequest',id,reason);db.commit();return {'success':True}
 @app.websocket('/ws/attendance')
 async def websocket(ws:WebSocket):
     token=ws.query_params.get('token')
