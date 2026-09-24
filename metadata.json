@@ -1,0 +1,6 @@
+{
+  "name": "Tandara - Presensi Sekolah",
+  "description": "Frontend MVP untuk Admin IT dan Guru/Piket sistem absensi sekolah berbasis pengenalan wajah Tandara.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
