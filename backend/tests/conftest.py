@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ['DATABASE_URL'] = f"sqlite:///{Path(__file__).resolve().parents[1] / 'data' / 'tandara_test.db'}"
+os.environ['SECRET_KEY'] = 'test-secret-key-for-tandara-security-hardening-2026'
 
 from app.database import Base, engine, SessionLocal
 from app.full import app

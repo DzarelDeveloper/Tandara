@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import jwt
 from argon2.exceptions import VerifyMismatchError
@@ -19,7 +19,7 @@ class Login(BaseModel):
 
 
 def token(user):
-    return jwt.encode({'sub': str(user.id), 'role': user.role, 'exp': datetime.utcnow() + timedelta(minutes=settings.access_token_expire_minutes)}, settings.secret_key, algorithm='HS256')
+    return jwt.encode({'sub': str(user.id), 'role': user.role, 'exp': datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)}, settings.secret_key, algorithm='HS256')
 
 
 router = APIRouter()

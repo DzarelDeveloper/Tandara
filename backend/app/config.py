@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 BASE_DIR = Path(__file__).resolve().parents[2]
 class Settings(BaseSettings):
     app_name: str = 'Kena Scan Tandara'
-    secret_key: str = 'development-only-change-me'
+    secret_key: str
     access_token_expire_minutes: int = 480
     database_url: str = f'sqlite:///{BASE_DIR / "data" / "kena_scan.db"}'
     frontend_origin: str = 'http://localhost:3000,http://localhost:5173'

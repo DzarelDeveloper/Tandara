@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 import jwt
 import pytest
 from fastapi.testclient import TestClient
@@ -76,8 +76,9 @@ def test_students_crud_filters_history_and_audit(client, actors, headers, classr
     created = client.post('/api/students', headers=headers['admin'], json=body); assert created.status_code == 200; sid = created.json()['data']['id']
     assert client.post('/api/students', headers=headers['admin'], json=body).json()['code'] == 'NIS_EXISTS'
     assert client.post('/api/students', headers=headers['admin'], json={**body, 'nis': 'BADCLASS', 'class_id': 999}).status_code == 422
-    assert client.post('/api/students', headers=headers['admin'], json={**body, 'nis': 'BADGUARD', 'guardian_id': 999}).status_code == 200
-    assert len(client.get('/api/students', headers=headers['admin'], params={'q': 'Alpha'}).json()['data']) == 2
+    invalid = client.post('/api/students', headers=headers['admin'], json={**body, 'nis': 'BADGUARD', 'guardian_id': 999}); assert invalid.status_code == 422 and invalid.json()['code'] == 'GUARDIAN_NOT_FOUND'
+    assert client.post('/api/students', headers=headers['admin'], json={**body, 'nis': 'NO-GUARD', 'full_name': 'No Guardian', 'guardian_id': None}).status_code == 200
+    assert len(client.get('/api/students', headers=headers['admin'], params={'q': 'Alpha'}).json()['data']) == 1
     assert len(client.get('/api/students', headers=headers['admin'], params={'q': 'S-001'}).json()['data']) == 1
     assert len(client.get('/api/students', headers=headers['admin'], params={'class_id': classroom}).json()['data']) == 2
     assert client.get(f'/api/students/{sid}', headers=headers['admin']).status_code == 200
@@ -156,6 +157,11 @@ def test_reports_and_audit_log_contract(client, actors, headers, student):
 def test_websocket_auth_events_and_disconnect(client, actors, headers, student):
     try:
         with client.websocket_connect('/ws/attendance'):
+            assert False
+    except WebSocketDisconnect as exc: assert exc.code == 1008
+    inactive_token = jwt.encode({'sub': str(actors['inactive_id']), 'role': 'GURU_PIKET', 'exp': datetime.now(timezone.utc) + timedelta(minutes=5)}, settings.secret_key, algorithm='HS256')
+    try:
+        with client.websocket_connect('/ws/attendance?token=' + inactive_token):
             assert False
     except WebSocketDisconnect as exc: assert exc.code == 1008
     admin_token = headers['admin']['Authorization'][7:]
