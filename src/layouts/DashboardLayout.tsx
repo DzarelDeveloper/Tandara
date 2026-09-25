@@ -13,6 +13,8 @@ import { EmptyState } from '../components/ui/EmptyState';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { ShieldCheck, HelpCircle, FileText, CheckCircle2 } from 'lucide-react';
+import { reportsService } from '../services/reports.service';
+import { AuditLog } from '../types';
 
 export const DashboardLayout: React.FC = () => {
   const { logout, isAdmin } = useAuth();
@@ -31,10 +33,20 @@ export const DashboardLayout: React.FC = () => {
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [showAuditModal, setShowAuditModal] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState('');
 
   useEffect(() => {
     localStorage.setItem('tandara_sidebar_collapsed', String(collapsed));
   }, [collapsed]);
+
+  useEffect(() => {
+    if (!showAuditModal) return;
+    setAuditLoading(true);
+    setAuditError('');
+    reportsService.getAuditLogs().then(setAuditLogs).catch((error: unknown) => setAuditError(error instanceof Error ? error.message : 'Gagal memuat audit log.')).finally(() => setAuditLoading(false));
+  }, [showAuditModal]);
 
   const handleLogout = () => {
     logout();
@@ -125,11 +137,10 @@ export const DashboardLayout: React.FC = () => {
           maxWidth="2xl"
         >
           <div className="space-y-4">
-            <EmptyState
-              icon={ShieldCheck}
-              title="Belum ada catatan audit"
-              description="Seluruh perubahan data siswa, pendaftaran wajah, dan konfigurasi server akan terekam secara otomatis setelah FastAPI backend dan database SQLite aktif."
-            />
+            {auditLoading && <p className="text-sm text-slate-500">Memuat audit log...</p>}
+            {auditError && <p className="text-sm text-red-700">{auditError}</p>}
+            {!auditLoading && !auditError && auditLogs.length === 0 && <EmptyState icon={ShieldCheck} title="Belum ada catatan audit" description="Belum ada event audit dari backend." />}
+            {!auditLoading && !auditError && auditLogs.length > 0 && <div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="text-left text-slate-500 border-b"><th className="py-2">Waktu</th><th>Username</th><th>Aksi</th><th>Entity</th><th>ID</th><th>Detail</th></tr></thead><tbody>{auditLogs.map((log) => <tr key={log.id} className="border-b border-slate-100"><td className="py-2 pr-3 font-mono">{log.timestamp}</td><td className="pr-3">{log.username || '-'}</td><td className="pr-3">{log.action}</td><td className="pr-3">{log.entity}</td><td className="pr-3">{log.entityId || '-'}</td><td>{log.details}</td></tr>)}</tbody></table></div>}
           </div>
         </Modal>
       )}

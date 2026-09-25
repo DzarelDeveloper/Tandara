@@ -10,6 +10,9 @@ import * as z from 'zod';
 import { Modal } from '../ui/Modal';
 import { useToast } from '../../context/ToastContext';
 import { Eye, EyeOff } from 'lucide-react';
+import { parentsService } from '../../services/parents.service';
+import { studentsService } from '../../services/students.service';
+import { Student } from '../../types';
 
 const phoneRegex = /^(\+62|62|0)8[1-9][0-9]{6,11}$/;
 
@@ -37,9 +40,15 @@ interface ParentFormModalProps {
 }
 
 export const ParentFormModal: React.FC<ParentFormModalProps> = ({ isOpen, onClose }) => {
-  const { showBackendNotConnected } = useToast();
+  const { showToast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [students, setStudents] = useState<Student[]>([]);
+
+  React.useEffect(() => {
+    if (!isOpen) return;
+    studentsService.getStudents().then(setStudents).catch(() => setStudents([]));
+  }, [isOpen]);
 
   const {
     register,
@@ -60,13 +69,15 @@ export const ParentFormModal: React.FC<ParentFormModalProps> = ({ isOpen, onClos
     },
   });
 
-  const onSubmit = async (_data: ParentFormValues) => {
+  const onSubmit = async (data: ParentFormValues) => {
     setIsSubmitting(true);
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    setIsSubmitting(false);
-    showBackendNotConnected('Backend belum terhubung. Akun orang tua belum dapat disimpan.');
-    onClose();
-    reset();
+    try {
+      const parent = await parentsService.createParent(data);
+      await parentsService.linkStudent(parent.id, data.studentId);
+      showToast({ type: 'success', message: 'Data wali dan hubungan siswa berhasil dibuat.' }); onClose(); reset();
+    }
+    catch (e) { showToast({ type: 'error', message: e instanceof Error ? e.message : 'Gagal membuat wali.' }); }
+    finally { setIsSubmitting(false); }
   };
 
   return (
@@ -135,7 +146,8 @@ export const ParentFormModal: React.FC<ParentFormModalProps> = ({ isOpen, onClos
               {...register('studentId')}
               className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
             >
-              <option value="">-- Pilih Siswa (Daftar Kosong) --</option>
+              <option value="">-- Pilih Siswa --</option>
+              {students.map((student) => <option key={student.id} value={student.id}>{student.fullName} ({student.nis})</option>)}
             </select>
             {errors.studentId && (
               <p className="text-xs text-red-600 mt-1 font-medium">{errors.studentId.message}</p>

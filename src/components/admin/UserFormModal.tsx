@@ -11,6 +11,7 @@ import * as z from 'zod';
 import { Modal } from '../ui/Modal';
 import { useToast } from '../../context/ToastContext';
 import { Shield, Eye, EyeOff } from 'lucide-react';
+import { usersService } from '../../services/users.service';
 
 const userSchema = z.object({
   fullName: z.string().min(2, 'Nama lengkap wajib diisi.'),
@@ -24,10 +25,11 @@ type UserFormValues = z.infer<typeof userSchema>;
 interface UserFormModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onCreated: () => Promise<void>;
 }
 
-export const UserFormModal: React.FC<UserFormModalProps> = ({ isOpen, onClose }) => {
-  const { showBackendNotConnected } = useToast();
+export const UserFormModal: React.FC<UserFormModalProps> = ({ isOpen, onClose, onCreated }) => {
+  const { showToast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
@@ -46,13 +48,11 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({ isOpen, onClose })
     },
   });
 
-  const onSubmit = async (_data: UserFormValues) => {
+  const onSubmit = async (data: UserFormValues) => {
     setIsSubmitting(true);
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    setIsSubmitting(false);
-    showBackendNotConnected('Backend belum terhubung. Akun pengguna belum dapat disimpan.');
-    onClose();
-    reset();
+    try { await usersService.createUser({ ...data, role: 'TEACHER' }); await onCreated(); showToast({ type: 'success', message: 'Akun pengguna berhasil dibuat.' }); onClose(); reset(); }
+    catch (e) { showToast({ type: 'error', message: e instanceof Error ? e.message : 'Gagal membuat akun.' }); }
+    finally { setIsSubmitting(false); }
   };
 
   return (

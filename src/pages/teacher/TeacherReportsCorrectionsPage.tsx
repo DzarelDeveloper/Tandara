@@ -23,6 +23,7 @@ import { BackendDisconnected } from '../../components/ui/BackendDisconnected';
 import { CorrectionFormModal } from '../../components/teacher/CorrectionFormModal';
 import { useToast } from '../../context/ToastContext';
 import { AttendanceCorrection } from '../../types';
+import { reportsService } from '../../services/reports.service';
 
 export const TeacherReportsCorrectionsPage: React.FC = () => {
   const { showBackendNotConnected } = useToast();
@@ -34,6 +35,7 @@ export const TeacherReportsCorrectionsPage: React.FC = () => {
   const [selectedStatus, setSelectedStatus] = useState('');
 
   const [showCorrectionModal, setShowCorrectionModal] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const kpis = [
     { label: 'Rata-rata Kehadiran', value: '—', icon: BarChart3, color: 'text-emerald-600' },
@@ -42,12 +44,18 @@ export const TeacherReportsCorrectionsPage: React.FC = () => {
     { label: 'Alpa / Tanpa Keterangan', value: '—', icon: XCircle, color: 'text-red-600' },
   ];
 
-  const handleExportPDF = () => {
-    showBackendNotConnected('Backend belum terhubung. Ekspor laporan PDF memerlukan pemrosesan server.');
-  };
-
-  const handleExportExcel = () => {
-    showBackendNotConnected('Backend belum terhubung. Ekspor rekapitulasi Excel memerlukan data dari server.');
+  const handleExportCsv = async () => {
+    setIsDownloading(true);
+    try {
+      const response = await reportsService.downloadAttendanceCsv({ classId: selectedClass, status: selectedStatus });
+      const blob = await response.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/i)?.[1] || 'tandara-attendance.csv';
+      link.click();
+      URL.revokeObjectURL(link.href);
+    } catch (error) { showBackendNotConnected(error instanceof Error ? error.message : 'Gagal mengunduh laporan CSV.'); }
+    finally { setIsDownloading(false); }
   };
 
   // Correction table columns
@@ -119,8 +127,6 @@ export const TeacherReportsCorrectionsPage: React.FC = () => {
           { label: 'Rekap & Koreksi' },
         ]}
       />
-
-      <BackendDisconnected moduleName="Modul Rekapitulasi & Koreksi" />
 
       {/* Tabs */}
       <div className="flex items-center gap-2 border-b border-slate-200 pb-px">
@@ -216,19 +222,20 @@ export const TeacherReportsCorrectionsPage: React.FC = () => {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={handleExportPDF}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs sm:text-sm font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors shadow-xs"
-              >
-                <FileText className="w-4 h-4 text-red-600" />
-                Ekspor PDF
-              </button>
-              <button
-                type="button"
-                onClick={handleExportExcel}
+                onClick={handleExportCsv}
+                disabled={isDownloading}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs sm:text-sm font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors shadow-xs"
               >
                 <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-                Ekspor Excel
+                {isDownloading ? 'Mengunduh...' : 'Ekspor CSV'}
+              </button>
+              <button
+                type="button"
+                disabled
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs sm:text-sm font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors shadow-xs"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                PDF/Excel belum tersedia
               </button>
             </div>
           </div>

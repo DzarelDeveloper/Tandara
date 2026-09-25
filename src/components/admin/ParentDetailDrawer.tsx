@@ -8,29 +8,50 @@ import { Drawer } from '../ui/Drawer';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { useToast } from '../../context/ToastContext';
 import { Parent } from '../../types';
-import { User, Phone, KeyRound, UserMinus, Link } from 'lucide-react';
+import { User, Phone, KeyRound, UserMinus, Link, Pencil, Save } from 'lucide-react';
+import { parentsService } from '../../services/parents.service';
+import { studentsService } from '../../services/students.service';
+import { Student } from '../../types';
 
 interface ParentDetailDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   parent: Parent | null;
+  onChanged: () => Promise<void>;
 }
 
 export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
   isOpen,
   onClose,
   parent,
+  onChanged,
 }) => {
-  const { showBackendNotConnected } = useToast();
+  const { showToast } = useToast();
   const [confirmAction, setConfirmAction] = useState<'reset' | 'status' | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [fullName, setFullName] = useState(parent?.fullName || '');
+  const [phone, setPhone] = useState(parent?.phone || '');
+  const [students, setStudents] = useState<Student[]>([]);
+  const [studentId, setStudentId] = useState('');
 
-  const handleActionConfirm = () => {
-    if (confirmAction === 'reset') {
-      showBackendNotConnected('Backend belum terhubung. Permintaan reset password belum dapat diproses.');
-    } else if (confirmAction === 'status') {
-      showBackendNotConnected('Backend belum terhubung. Perubahan status akun belum dapat disimpan.');
+  const handleActionConfirm = async () => {
+    if (confirmAction === 'status' && parent) {
+      try { await parentsService.toggleStatus(parent.id, parent.accountStatus !== 'ACTIVE'); await onChanged(); showToast({ type: 'success', message: 'Status wali berhasil diperbarui.' }); }
+      catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal memperbarui status wali.' }); }
     }
     setConfirmAction(null);
+  };
+
+  const handleSave = async () => {
+    if (!parent) return;
+    try { await parentsService.updateParent(parent.id, { fullName, phone }); await onChanged(); setEditing(false); showToast({ type: 'success', message: 'Data wali berhasil diperbarui.' }); }
+    catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal memperbarui data wali.' }); }
+  };
+
+  const handleLinkStudent = async () => {
+    if (!studentId || !parent) return;
+    try { await parentsService.linkStudent(parent.id, studentId); await onChanged(); setStudents([]); setStudentId(''); showToast({ type: 'success', message: 'Siswa berhasil dihubungkan.' }); }
+    catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal menghubungkan siswa.' }); }
   };
 
   if (!parent) return null;
@@ -52,7 +73,7 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
                 {parent.fullName.slice(0, 2).toUpperCase()}
               </div>
               <div>
-                <h4 className="text-sm font-semibold text-slate-900">{parent.fullName}</h4>
+                {editing ? <input value={fullName} onChange={(event) => setFullName(event.target.value)} className="text-sm font-semibold text-slate-900 border rounded px-2 py-1" /> : <h4 className="text-sm font-semibold text-slate-900">{parent.fullName}</h4>}
                 <p className="text-xs text-slate-500">Hubungan: {parent.relationship}</p>
               </div>
             </div>
@@ -62,7 +83,7 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
                 <span className="text-slate-400 block text-[10px] uppercase font-semibold">Telepon</span>
                 <span className="text-slate-800 font-mono flex items-center gap-1 mt-0.5">
                   <Phone className="w-3 h-3 text-slate-400" />
-                  {parent.phone}
+                  {editing ? <input value={phone} onChange={(event) => setPhone(event.target.value)} className="font-mono border rounded px-1" /> : parent.phone}
                 </span>
               </div>
               <div>
@@ -75,15 +96,18 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
             </div>
           </div>
 
+          <button type="button" onClick={editing ? handleSave : () => setEditing(true)} className="inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600">
+            {editing ? <Save className="w-3.5 h-3.5" /> : <Pencil className="w-3.5 h-3.5" />}
+            {editing ? 'Simpan perubahan' : 'Edit data wali'}
+          </button>
+
           {/* Connected Students Section */}
           <div>
             <div className="flex items-center justify-between mb-2">
               <h5 className="text-xs font-semibold text-slate-700 uppercase">Siswa Terhubung</h5>
               <button
                 type="button"
-                onClick={() =>
-                  showBackendNotConnected('Backend belum terhubung. Hubungkan siswa memerlukan basis data.')
-                }
+                onClick={async () => { try { setStudents(await studentsService.getStudents()); } catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal memuat siswa.' }); } }}
                 className="text-xs text-[#2563EB] hover:text-[#1D4ED8] font-medium flex items-center gap-1"
               >
                 <Link className="w-3 h-3" />
@@ -91,8 +115,10 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
               </button>
             </div>
 
-            <div className="p-4 rounded-xl border border-dashed border-slate-200 bg-white text-center text-xs text-slate-500">
-              Belum ada siswa terhubung.
+            {students.length > 0 && <div className="flex gap-2 mb-2"><select value={studentId} onChange={(event) => setStudentId(event.target.value)} className="flex-1 text-xs border rounded px-2 py-1"><option value="">Pilih siswa</option>{students.map((student) => <option key={student.id} value={student.id}>{student.fullName} ({student.nis})</option>)}</select><button type="button" onClick={handleLinkStudent} disabled={!studentId} className="text-xs font-semibold text-blue-600 disabled:opacity-50">Simpan</button></div>}
+
+            <div className="p-4 rounded-xl border border-dashed border-slate-200 bg-white text-xs text-slate-500">
+              {parent.connectedStudentNames.length ? parent.connectedStudentNames.join(', ') : 'Belum ada siswa terhubung.'}
             </div>
           </div>
 
@@ -104,7 +130,7 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
                 <span className="text-[11px] text-slate-500">Pemberitahuan presensi harian otomatis</span>
               </div>
               <span className="px-2 py-0.5 text-[11px] font-medium rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
-                Aktif
+                {parent.notificationsActive ? 'Aktif' : 'Tidak tersedia'}
               </span>
             </div>
 
@@ -114,7 +140,7 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
                 <span className="text-[11px] text-slate-500">Akses login wali murid</span>
               </div>
               <span className="px-2 py-0.5 text-[11px] font-medium rounded bg-slate-100 text-slate-700 border border-slate-200">
-                Belum Aktivasi
+                {parent.accountStatus}
               </span>
             </div>
           </div>
@@ -123,7 +149,7 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
           <div className="pt-6 border-t border-slate-200 space-y-2">
             <button
               type="button"
-              onClick={() => setConfirmAction('reset')}
+              onClick={() => showToast({ type: 'info', message: 'Reset password wali belum tersedia di backend.' })}
               className="w-full py-2.5 px-4 bg-white hover:bg-slate-50 text-slate-700 text-xs sm:text-sm font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors border border-slate-300 shadow-xs"
             >
               <KeyRound className="w-4 h-4 text-slate-500" />
@@ -146,14 +172,12 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
         isOpen={confirmAction !== null}
         onClose={() => setConfirmAction(null)}
         onConfirm={handleActionConfirm}
-        title={confirmAction === 'reset' ? 'Reset Password Sementara?' : 'Nonaktifkan Akun Orang Tua?'}
+        title="Ubah Status Akun Orang Tua?"
         description={
-          confirmAction === 'reset'
-            ? 'Password acak baru akan digenerate dan dikirimkan ke kontak orang tua setelah backend aktif.'
-            : 'Akun ini tidak akan dapat login ke aplikasi mobile orang tua Tandara hingga diaktifkan kembali.'
+          'Status akun akan diperbarui pada backend. Wali yang masih terhubung ke siswa aktif tidak dapat dinonaktifkan.'
         }
-        confirmLabel={confirmAction === 'reset' ? 'Ya, Reset Password' : 'Ya, Nonaktifkan'}
-        isDestructive={confirmAction === 'status'}
+        confirmLabel="Ubah Status"
+        isDestructive={parent.accountStatus === 'ACTIVE'}
       />
     </>
   );

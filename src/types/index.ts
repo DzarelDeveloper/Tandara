@@ -3,7 +3,7 @@
  * Prepares the TypeScript interfaces and enums for future FastAPI backend integration.
  */
 
-export type Role = 'ADMIN_IT' | 'TEACHER';
+export type Role = 'ADMIN_IT' | 'TEACHER' | 'GURU_PIKET';
 
 export type AttendanceType = 'CHECK_IN' | 'CHECK_OUT';
 

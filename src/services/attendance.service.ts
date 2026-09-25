@@ -42,6 +42,7 @@ export const attendanceService = {
     const params = new URLSearchParams(filters);
     return apiRequest<AttendanceRecord[]>(`/api/attendance?${params.toString()}`);
   },
+  async getSummary(): Promise<{ today:number; students:number }> { return apiRequest('/api/attendance/summary'); },
 
   async startLiveSession(payload: StartSessionPayload): Promise<{ sessionId: string; status: string }> {
     const data = await apiRequest<{ id: string; status: string }>('/api/attendance-sessions/open', {

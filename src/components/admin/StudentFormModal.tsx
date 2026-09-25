@@ -3,12 +3,15 @@
  * Form for registering new students with full field validation.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Modal } from '../ui/Modal';
 import { useToast } from '../../context/ToastContext';
+import { studentsService } from '../../services/students.service';
+import { classesService } from '../../services/classes.service';
+import { parentsService } from '../../services/parents.service';
 
 // Indonesian phone number validation (08xx or +628xx)
 const phoneRegex = /^(\+62|62|0)8[1-9][0-9]{6,11}$/;
@@ -18,7 +21,8 @@ const nisRegex = /^[A-Za-z0-9\-\.]{4,20}$/;
 const studentSchema = z.object({
   fullName: z.string().min(2, 'Nama lengkap wajib diisi (minimal 2 karakter).'),
   nis: z.string().regex(nisRegex, 'NIS harus berupa alfanumerik 4-20 karakter.'),
-  className: z.string().min(1, 'Kelas wajib dipilih.'),
+  classId: z.string().min(1, 'Kelas wajib dipilih.'),
+  guardianId: z.string().optional(),
   major: z.string().min(1, 'Jurusan wajib dipilih.'),
   gender: z.enum(['L', 'P'] as const),
   parentName: z.string().min(2, 'Nama orang tua/wali wajib diisi.'),
@@ -34,8 +38,10 @@ interface StudentFormModalProps {
 }
 
 export const StudentFormModal: React.FC<StudentFormModalProps> = ({ isOpen, onClose }) => {
-  const { showBackendNotConnected } = useToast();
+  const { showToast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [classes, setClasses] = useState<any[]>([]);
+  const [guardians, setGuardians] = useState<any[]>([]);
 
   const {
     register,
@@ -47,7 +53,7 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({ isOpen, onCl
     defaultValues: {
       fullName: '',
       nis: '',
-      className: '',
+      classId: '', guardianId: '',
       major: '',
       gender: 'L',
       parentName: '',
@@ -56,14 +62,13 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({ isOpen, onCl
     },
   });
 
-  const onSubmit = async (_data: StudentFormValues) => {
+  useEffect(() => { if (isOpen) Promise.all([classesService.getClasses(), parentsService.getParents()]).then(([c, g]) => { setClasses(c as any[]); setGuardians(g as any[]); }).catch((e) => showToast({ type: 'error', message: e instanceof Error ? e.message : 'Gagal memuat kelas atau wali.' })); }, [isOpen]);
+
+  const onSubmit = async (data: StudentFormValues) => {
     setIsSubmitting(true);
-    // Simulate brief validation delay then notify backend not connected
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    setIsSubmitting(false);
-    showBackendNotConnected('Backend belum terhubung. Data siswa baru belum dapat disimpan.');
-    onClose();
-    reset();
+    try { await studentsService.createStudent({ ...data, classId: data.classId, guardianId: data.guardianId || null }); showToast({ type: 'success', message: 'Siswa berhasil disimpan.' }); reset(); onClose(); }
+    catch (e) { showToast({ type: 'error', message: e instanceof Error ? e.message : 'Gagal menyimpan siswa.' }); }
+    finally { setIsSubmitting(false); }
   };
 
   return (
@@ -115,19 +120,14 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({ isOpen, onCl
               Kelas <span className="text-red-500">*</span>
             </label>
             <select
-              {...register('className')}
+              {...register('classId')}
               className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
             >
               <option value="">Pilih Kelas</option>
-              <option value="X-A">X-A</option>
-              <option value="X-B">X-B</option>
-              <option value="XI-IPA-1">XI-IPA-1</option>
-              <option value="XI-IPS-1">XI-IPS-1</option>
-              <option value="XII-IPA-1">XII-IPA-1</option>
-              <option value="XII-IPS-1">XII-IPS-1</option>
+              {classes.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.major}</option>)}
             </select>
-            {errors.className && (
-              <p className="text-xs text-red-600 mt-1 font-medium">{errors.className.message}</p>
+            {errors.classId && (
+              <p className="text-xs text-red-600 mt-1 font-medium">{errors.classId.message}</p>
             )}
           </div>
 
@@ -168,6 +168,10 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({ isOpen, onCl
         <div className="pt-2 border-t border-slate-100">
           <p className="text-xs font-semibold text-slate-800 mb-3">Kontak Orang Tua / Wali</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Wali (opsional)</label>
+              <select {...register('guardianId')} className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-lg"><option value="">Tanpa wali</option>{guardians.map((item) => <option key={item.id} value={item.id}>{item.fullName}</option>)}</select>
+            </div>
             <div>
               <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 Nama Orang Tua/Wali <span className="text-red-500">*</span>

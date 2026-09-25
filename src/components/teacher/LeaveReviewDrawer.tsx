@@ -8,27 +8,30 @@ import { Drawer } from '../ui/Drawer';
 import { useToast } from '../../context/ToastContext';
 import { LeaveRequest } from '../../types';
 import { User, FileText, Check, X, AlertCircle } from 'lucide-react';
+import { leaveService } from '../../services/leave.service';
 
 interface LeaveReviewDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   leaveRequest: LeaveRequest | null;
+  onReviewed: () => Promise<void>;
 }
 
 export const LeaveReviewDrawer: React.FC<LeaveReviewDrawerProps> = ({
   isOpen,
   onClose,
   leaveRequest,
+  onReviewed,
 }) => {
-  const { showBackendNotConnected } = useToast();
+  const { showToast } = useToast();
   const [reviewNote, setReviewNote] = useState('');
   const [rejectMode, setRejectMode] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [rejectError, setRejectError] = useState('');
 
-  const handleApprove = () => {
-    showBackendNotConnected('Backend belum terhubung. Persetujuan izin belum dapat disimpan ke server.');
-    onClose();
+  const handleApprove = async () => {
+    try { await leaveService.approveRequest(leaveRequest?.id || '', reviewNote); await onReviewed(); showToast({ type: 'success', message: 'Pengajuan izin disetujui.' }); }
+    catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal menyetujui pengajuan.' }); }
   };
 
   const handleReject = () => {
@@ -42,8 +45,8 @@ export const LeaveReviewDrawer: React.FC<LeaveReviewDrawerProps> = ({
       return;
     }
 
-    showBackendNotConnected('Backend belum terhubung. Penolakan permohonan izin belum dapat disimpan.');
-    onClose();
+    if (!leaveRequest) return;
+    void leaveService.rejectRequest(leaveRequest.id, rejectReason).then(async () => { await onReviewed(); showToast({ type: 'success', message: 'Pengajuan izin ditolak.' }); }).catch((error: unknown) => showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal menolak pengajuan.' }));
   };
 
   if (!leaveRequest) return null;

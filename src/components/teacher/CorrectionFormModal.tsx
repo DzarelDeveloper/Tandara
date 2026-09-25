@@ -10,6 +10,7 @@ import * as z from 'zod';
 import { Modal } from '../ui/Modal';
 import { useToast } from '../../context/ToastContext';
 import { AttendanceStatus } from '../../types';
+import { attendanceService } from '../../services/attendance.service';
 
 const correctionSchema = z.object({
   studentId: z.string().min(1, 'Siswa wajib dipilih.'),
@@ -24,13 +25,15 @@ type CorrectionFormValues = z.infer<typeof correctionSchema>;
 interface CorrectionFormModalProps {
   isOpen: boolean;
   onClose: () => void;
+  attendanceId?: string;
+  onSuccess?: () => void;
 }
 
 export const CorrectionFormModal: React.FC<CorrectionFormModalProps> = ({
   isOpen,
-  onClose,
+  onClose, attendanceId, onSuccess,
 }) => {
-  const { showBackendNotConnected } = useToast();
+  const { showToast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const {
@@ -49,15 +52,12 @@ export const CorrectionFormModal: React.FC<CorrectionFormModalProps> = ({
     },
   });
 
-  const onSubmit = async (_data: CorrectionFormValues) => {
+  const onSubmit = async (data: CorrectionFormValues) => {
+    if (!attendanceId) return;
     setIsSubmitting(true);
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    setIsSubmitting(false);
-    showBackendNotConnected(
-      'Backend belum terhubung. Pengajuan koreksi absensi belum dapat disimpan ke server.'
-    );
-    onClose();
-    reset();
+    try { await attendanceService.submitCorrection({ recordId: attendanceId, newStatus: data.newStatus, reason: data.reason }); showToast({ type: 'success', message: 'Koreksi presensi disimpan.' }); reset(); onClose(); onSuccess?.(); }
+    catch (e) { showToast({ type: 'error', message: e instanceof Error ? e.message : 'Koreksi gagal.' }); }
+    finally { setIsSubmitting(false); }
   };
 
   return (

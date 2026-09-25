@@ -1,10 +1,8 @@
 /**
  * Tandara Classes & Majors Service
  * Typed for future FastAPI endpoints:
- * GET    /api/v1/classes
- * POST   /api/v1/classes
- * POST   /api/v1/majors
- * PUT    /api/v1/classes/:id/schedule
+ * GET    /api/classes
+ * POST   /api/classes
  */
 
 import { Class } from '../types';
@@ -32,27 +30,18 @@ export interface AttendanceSchedulePayload {
 
 export const classesService = {
   async getClasses(): Promise<Class[]> {
-    return apiRequest<Class[]>('/api/classes');
+    const classes = await apiRequest<Array<Record<string, unknown>>>('/api/classes');
+    return classes.map((item) => ({
+      id: String(item.id), name: String(item.name), grade: String(item.grade) as Class['grade'],
+      major: String(item.major), homeroomTeacher: '-', studentCount: Number(item.studentCount || 0),
+      checkInTime: '-', lateToleranceTime: '-', checkOutTime: '-', activeDays: [],
+    }));
   },
 
   async createClass(payload: CreateClassPayload): Promise<Class> {
     return await apiRequest<Class>('/api/classes', {
       method: 'POST',
-      body: JSON.stringify({ ...payload, school_year: new Date().getFullYear().toString() }),
-    });
-  },
-
-  async createMajor(payload: CreateMajorPayload): Promise<{ id: string; name: string }> {
-    return await apiRequest('/api/v1/majors', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
-  },
-
-  async updateSchedule(schedule: AttendanceSchedulePayload): Promise<void> {
-    await apiRequest('/api/v1/classes/schedule', {
-      method: 'PUT',
-      body: JSON.stringify(schedule),
+      body: JSON.stringify({ name: payload.name, grade: payload.grade, major: payload.major, school_year: new Date().getFullYear().toString() }),
     });
   },
 };

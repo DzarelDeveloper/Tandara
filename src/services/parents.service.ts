@@ -1,11 +1,10 @@
 /**
  * Tandara Parent Service
  * Typed for future FastAPI endpoints:
- * GET    /api/v1/parents
- * POST   /api/v1/parents
- * POST   /api/v1/parents/:id/link-student
- * POST   /api/v1/parents/:id/reset-password
- * PATCH  /api/v1/parents/:id/status
+ * GET    /api/guardians
+ * POST   /api/guardians
+ * POST   /api/guardians/:id/students
+ * PATCH  /api/guardians/:id/status
  */
 
 import { Parent } from '../types';
@@ -23,35 +22,37 @@ export interface CreateParentPayload {
 
 export const parentsService = {
   async getParents(): Promise<Parent[]> {
-    // When backend is connected, use:
-    // return await apiRequest<Parent[]>('/api/v1/parents');
-    return [];
+    const parents = await apiRequest<Array<Record<string, unknown>>>('/api/guardians?include_inactive=true');
+    return parents.map((parent) => ({
+      id: String(parent.id), fullName: String(parent.fullName), phone: String(parent.phone),
+      relationship: 'Wali', connectedStudentIds: (parent.studentIds as string[]) || [],
+      connectedStudentNames: (parent.studentNames as string[]) || [], username: '',
+      accountStatus: parent.isActive ? 'ACTIVE' : 'INACTIVE', notificationsActive: false,
+      createdAt: String(parent.createdAt),
+    }));
   },
 
   async createParent(payload: CreateParentPayload): Promise<Parent> {
-    return await apiRequest<Parent>('/api/v1/parents', {
+    return await apiRequest<Parent>('/api/guardians', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ full_name: payload.fullName, phone_number: payload.phone }),
     });
+  },
+
+  async updateParent(parentId: string, payload: Pick<CreateParentPayload, 'fullName' | 'phone'>): Promise<void> {
+    await apiRequest(`/api/guardians/${parentId}`, { method: 'PATCH', body: JSON.stringify({ full_name: payload.fullName, phone_number: payload.phone }) });
   },
 
   async linkStudent(parentId: string, studentId: string): Promise<void> {
-    await apiRequest(`/api/v1/parents/${parentId}/link-student`, {
+    await apiRequest(`/api/guardians/${parentId}/students`, {
       method: 'POST',
-      body: JSON.stringify({ studentId }),
-    });
-  },
-
-  async resetPassword(parentId: string): Promise<{ temporaryPassword: string }> {
-    return await apiRequest<{ temporaryPassword: string }>(`/api/v1/parents/${parentId}/reset-password`, {
-      method: 'POST',
+      body: JSON.stringify([Number(studentId)]),
     });
   },
 
   async toggleStatus(parentId: string, active: boolean): Promise<void> {
-    await apiRequest(`/api/v1/parents/${parentId}/status`, {
+    await apiRequest(`/api/guardians/${parentId}/status?active=${active}`, {
       method: 'PATCH',
-      body: JSON.stringify({ active }),
     });
   },
 };

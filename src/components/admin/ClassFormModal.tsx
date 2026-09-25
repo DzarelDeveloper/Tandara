@@ -9,6 +9,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Modal } from '../ui/Modal';
 import { useToast } from '../../context/ToastContext';
+import { classesService } from '../../services/classes.service';
 
 const classSchema = z.object({
   name: z.string().min(2, 'Nama kelas wajib diisi (contoh: X-MIPA-1).'),
@@ -22,10 +23,11 @@ type ClassFormValues = z.infer<typeof classSchema>;
 interface ClassFormModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onCreated: () => Promise<void>;
 }
 
-export const ClassFormModal: React.FC<ClassFormModalProps> = ({ isOpen, onClose }) => {
-  const { showBackendNotConnected } = useToast();
+export const ClassFormModal: React.FC<ClassFormModalProps> = ({ isOpen, onClose, onCreated }) => {
+  const { showToast } = useToast();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const {
@@ -43,13 +45,11 @@ export const ClassFormModal: React.FC<ClassFormModalProps> = ({ isOpen, onClose 
     },
   });
 
-  const onSubmit = async (_data: ClassFormValues) => {
+  const onSubmit = async (data: ClassFormValues) => {
     setIsSubmitting(true);
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    setIsSubmitting(false);
-    showBackendNotConnected('Backend belum terhubung. Data kelas belum dapat disimpan.');
-    onClose();
-    reset();
+    try { await classesService.createClass(data); await onCreated(); showToast({ type: 'success', message: 'Kelas berhasil dibuat.' }); onClose(); reset(); }
+    catch (e) { showToast({ type: 'error', message: e instanceof Error ? e.message : 'Gagal membuat kelas.' }); }
+    finally { setIsSubmitting(false); }
   };
 
   return (

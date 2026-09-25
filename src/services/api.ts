@@ -26,7 +26,7 @@ export async function apiRequest<T>(
     const response = await fetch(url, {
       ...options,
       headers: {
-        'Content-Type': 'application/json',
+        ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...options.headers,
       },
@@ -34,7 +34,8 @@ export async function apiRequest<T>(
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.detail || `HTTP Error ${response.status}`);
+      const detail = errorData?.detail;
+      throw new Error(typeof detail === 'object' ? (detail.message || `HTTP Error ${response.status}`) : (detail || `HTTP Error ${response.status}`));
     }
 
     const payload = await response.json();
@@ -44,6 +45,23 @@ export async function apiRequest<T>(
     if (err instanceof TypeError && err.message.includes('fetch')) {
       throw new BackendDisconnectedError();
     }
+    throw err;
+  }
+}
+
+export async function apiRequestBlob(endpoint: string, options: RequestInit = {}): Promise<Response> {
+  const url = `${API_BASE_URL}${endpoint}`;
+  try {
+    const token = localStorage.getItem(ACCESS_TOKEN_KEY);
+    const response = await fetch(url, { ...options, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const detail = errorData?.detail;
+      throw new Error(typeof detail === 'object' ? (detail.message || `HTTP Error ${response.status}`) : (detail || `HTTP Error ${response.status}`));
+    }
+    return response;
+  } catch (err: unknown) {
+    if (err instanceof TypeError && err.message.includes('fetch')) throw new BackendDisconnectedError();
     throw err;
   }
 }

@@ -3,13 +3,15 @@
  * Route: /teacher/leave-requests
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { FilterBar } from '../../components/ui/FilterBar';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { BackendDisconnected } from '../../components/ui/BackendDisconnected';
 import { LeaveReviewDrawer } from '../../components/teacher/LeaveReviewDrawer';
 import { LeaveRequest } from '../../types';
+import { leaveService } from '../../services/leave.service';
+import { useToast } from '../../context/ToastContext';
 
 export const TeacherLeaveRequestsPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'PENDING' | 'APPROVED' | 'REJECTED' | 'ALL'>('PENDING');
@@ -19,12 +21,19 @@ export const TeacherLeaveRequestsPage: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState('');
 
   const [selectedRequest, setSelectedRequest] = useState<LeaveRequest | null>(null);
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
+  const { showToast } = useToast();
+  const loadRequests = async () => {
+    try { setLeaveRequests(await leaveService.getLeaveRequests()); }
+    catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal memuat pengajuan izin.' }); }
+  };
+  useEffect(() => { void loadRequests(); }, []);
 
   const tabs = [
-    { id: 'PENDING', label: 'Menunggu Review', badge: 0 },
-    { id: 'APPROVED', label: 'Disetujui', badge: 0 },
-    { id: 'REJECTED', label: 'Ditolak', badge: 0 },
-    { id: 'ALL', label: 'Semua', badge: 0 },
+    { id: 'PENDING', label: 'Menunggu Review' },
+    { id: 'APPROVED', label: 'Disetujui' },
+    { id: 'REJECTED', label: 'Ditolak' },
+    { id: 'ALL', label: 'Semua' },
   ];
 
   const columns: Column<LeaveRequest>[] = [
@@ -117,8 +126,14 @@ export const TeacherLeaveRequestsPage: React.FC = () => {
     },
   ];
 
-  // No fake records
-  const leaveRequests: LeaveRequest[] = [];
+  const visibleRequests = useMemo(() => leaveRequests.filter((request) => {
+    const matchesTab = activeTab === 'ALL' || request.status === activeTab;
+    const query = search.toLowerCase();
+    const matchesSearch = !query || `${request.studentName} ${request.parentName}`.toLowerCase().includes(query);
+    const matchesType = !selectedType || request.leaveType === ({ Sakit: 'SICK', Izin: 'PERMISSION', Dispensasi: 'DISPENSATION' } as Record<string, string>)[selectedType];
+    const matchesDate = !selectedDate || request.startDate === selectedDate;
+    return matchesTab && matchesSearch && matchesType && matchesDate;
+  }), [activeTab, leaveRequests, search, selectedDate, selectedType]);
 
   const handleResetFilters = () => {
     setSearch('');
@@ -140,8 +155,6 @@ export const TeacherLeaveRequestsPage: React.FC = () => {
         ]}
       />
 
-      <BackendDisconnected moduleName="Modul Pengajuan Izin" />
-
       {/* Tab Pills */}
       <div className="flex flex-wrap gap-2">
         {tabs.map((tab) => (
@@ -161,7 +174,7 @@ export const TeacherLeaveRequestsPage: React.FC = () => {
                 activeTab === tab.id ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-600'
               }`}
             >
-              {tab.badge}
+              {leaveRequests.filter((request) => tab.id === 'ALL' || request.status === tab.id).length}
             </span>
           </button>
         ))}
@@ -182,9 +195,9 @@ export const TeacherLeaveRequestsPage: React.FC = () => {
           className="px-3 py-2 text-xs sm:text-sm bg-slate-50 hover:bg-slate-100/70 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
         >
           <option value="">Semua Tipe Izin</option>
-          <option value="Sakit">Sakit</option>
-          <option value="Izin">Izin Keperluan Keluarga</option>
-          <option value="Dispensasi">Dispensasi Lomba/Kegiatan</option>
+          <option value="SICK">Sakit</option>
+          <option value="PERMISSION">Izin Keperluan Keluarga</option>
+          <option value="DISPENSATION">Dispensasi Lomba/Kegiatan</option>
         </select>
 
         <select
@@ -194,10 +207,7 @@ export const TeacherLeaveRequestsPage: React.FC = () => {
           className="px-3 py-2 text-xs sm:text-sm bg-slate-50 hover:bg-slate-100/70 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
         >
           <option value="">Semua Kelas</option>
-          <option value="X-A">X-A</option>
-          <option value="X-B">X-B</option>
-          <option value="XI-IPA-1">XI-IPA-1</option>
-          <option value="XII-IPA-1">XII-IPA-1</option>
+          <option value="">Filter kelas tersedia berdasarkan data backend</option>
         </select>
 
         <input
@@ -212,7 +222,7 @@ export const TeacherLeaveRequestsPage: React.FC = () => {
       {/* Data Table */}
       <DataTable
         columns={columns}
-        data={leaveRequests}
+        data={visibleRequests}
         emptyTitle="Belum ada pengajuan izin."
         emptyDescription="Pengajuan dari aplikasi orang tua akan muncul di sini setelah backend terhubung."
       />
@@ -222,6 +232,7 @@ export const TeacherLeaveRequestsPage: React.FC = () => {
         isOpen={selectedRequest !== null}
         onClose={() => setSelectedRequest(null)}
         leaveRequest={selectedRequest}
+        onReviewed={async () => { await loadRequests(); setSelectedRequest(null); }}
       />
     </div>
   );

@@ -3,7 +3,7 @@
  * Route: /teacher/attendance
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   CheckCircle2,
   Clock,
@@ -21,6 +21,8 @@ import { BackendDisconnected } from '../../components/ui/BackendDisconnected';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { useToast } from '../../context/ToastContext';
 import { AttendanceRecord } from '../../types';
+import { attendanceService } from '../../services/attendance.service';
+import { CorrectionFormModal } from '../../components/teacher/CorrectionFormModal';
 
 export const TeacherAttendancePage: React.FC = () => {
   const { showBackendNotConnected } = useToast();
@@ -30,10 +32,15 @@ export const TeacherAttendancePage: React.FC = () => {
   const [selectedGrade, setSelectedGrade] = useState('');
   const [selectedClass, setSelectedClass] = useState('');
   const [selectedStatus, setSelectedStatus] = useState('');
+  const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
+  const [summary, setSummary] = useState({ today: 0, students: 0 });
+  const [selectedRecord, setSelectedRecord] = useState<AttendanceRecord | null>(null);
+  const load = () => Promise.all([attendanceService.getAttendanceRecords({ date_from: selectedDate, date_to: selectedDate, ...(selectedStatus ? { status: selectedStatus } : {}) }), attendanceService.getSummary()]).then(([rows, stats]) => { setAttendanceRecords(rows); setSummary(stats); });
+  useEffect(() => { load().catch(() => undefined); }, [selectedDate, selectedStatus]);
 
   const kpis = [
-    { label: 'Hadir', value: '—', icon: CheckCircle2, color: 'text-emerald-600' },
-    { label: 'Terlambat', value: '—', icon: Clock, color: 'text-amber-600' },
+    { label: 'Presensi Hari Ini', value: String(summary.today), icon: CheckCircle2, color: 'text-emerald-600' },
+    { label: 'Total Siswa', value: String(summary.students), icon: Clock, color: 'text-amber-600' },
     { label: 'Izin / Sakit', value: '—', icon: AlertCircle, color: 'text-blue-600' },
     { label: 'Belum Hadir', value: '—', icon: XCircle, color: 'text-red-600' },
   ];
@@ -82,7 +89,7 @@ export const TeacherAttendancePage: React.FC = () => {
       key: 'actions',
       header: 'Aksi',
       className: 'text-right',
-      render: () => (
+      render: (item) => (
         <div className="flex items-center justify-end gap-2">
           <button
             type="button"
@@ -94,7 +101,7 @@ export const TeacherAttendancePage: React.FC = () => {
           <span className="text-slate-300">|</span>
           <button
             type="button"
-            onClick={() => showBackendNotConnected('Koreksi kehadiran memerlukan backend.')}
+            onClick={() => setSelectedRecord(item)}
             className="text-xs text-teal-700 hover:text-teal-900 font-medium"
           >
             Ajukan Koreksi
@@ -104,8 +111,6 @@ export const TeacherAttendancePage: React.FC = () => {
     },
   ];
 
-  // No fake records
-  const attendanceRecords: AttendanceRecord[] = [];
 
   const handleExportToday = () => {
     showBackendNotConnected('Backend belum terhubung. Ekspor rekapitulasi kehadiran memerlukan data dari server.');
@@ -272,6 +277,7 @@ export const TeacherAttendancePage: React.FC = () => {
           </div>
         </div>
       </div>
+      <CorrectionFormModal isOpen={!!selectedRecord} attendanceId={selectedRecord?.id} onClose={() => setSelectedRecord(null)} onSuccess={() => load()} />
     </div>
   );
 };

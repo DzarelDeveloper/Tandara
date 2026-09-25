@@ -38,8 +38,10 @@ export const studentsService = {
     }
   },
 
-  async createStudent(payload: CreateStudentPayload): Promise<Student> {
-    throw new Error('Pilih kelas dan wali melalui formulir administrasi; kontrak siswa belum mendukung pembuatan gabungan.');
+  async createStudent(payload: Omit<CreateStudentPayload, 'className'> & { classId: string; guardianId?: string | null }): Promise<Student> {
+    return apiRequest<Student>('/api/students', { method: 'POST', body: JSON.stringify({
+      nis: payload.nis, full_name: payload.fullName, class_id: Number(payload.classId), guardian_id: payload.guardianId ? Number(payload.guardianId) : null, gender: payload.gender,
+    }) });
   },
 
   async enrollFace(studentId: string, faceEmbeddings: number[][]): Promise<{ success: boolean }> {
@@ -50,11 +52,15 @@ export const studentsService = {
   async importStudents(file: File): Promise<{ importedCount: number }> {
     const formData = new FormData();
     formData.append('file', file);
-    const response = await fetch('/api/v1/students/import', {
-      method: 'POST',
-      body: formData,
-    });
-    if (!response.ok) throw new Error('Backend belum terhubung. Data belum dapat disimpan.');
-    return response.json();
+    return apiRequest<{ importedCount: number }>('/api/students/import', { method: 'POST', body: formData });
+  },
+  async previewImport(file: File): Promise<{ total_rows:number; valid_rows:number; invalid_rows:number; rows: Array<{ row_number:number; valid:boolean; errors:Array<{field:string;message:string}> }> }> {
+    const formData = new FormData(); formData.append('file', file);
+    return apiRequest('/api/students/import/preview', { method: 'POST', body: formData });
+  },
+  async downloadTemplate(): Promise<void> {
+    const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/students/import-template.csv`, { headers: { Authorization: `Bearer ${localStorage.getItem('tandara_access_token') || ''}` } });
+    if (!response.ok) throw new Error('Template tidak dapat diunduh.');
+    const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = 'tandara-template-siswa.csv'; link.click(); URL.revokeObjectURL(url);
   },
 };

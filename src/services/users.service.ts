@@ -1,9 +1,9 @@
 /**
  * Tandara Users Service (Admin IT management)
  * Typed for future FastAPI endpoints:
- * GET    /api/v1/users
- * POST   /api/v1/users (Teachers/Staff only)
- * PATCH  /api/v1/users/:id/status
+ * GET    /api/users
+ * POST   /api/users
+ * PATCH  /api/users/:id/status
  */
 
 import { User } from '../types';
@@ -25,7 +25,7 @@ export const usersService = {
   async createUser(payload: CreateTeacherUserPayload): Promise<User> {
     return await apiRequest<User>('/api/users', {
       method: 'POST',
-      body: JSON.stringify({ ...payload, role: 'GURU_PIKET' }),
+      body: JSON.stringify({ full_name: payload.fullName, username: payload.username, password: payload.password, role: 'GURU_PIKET', is_active: payload.isActive }),
     });
   },
 

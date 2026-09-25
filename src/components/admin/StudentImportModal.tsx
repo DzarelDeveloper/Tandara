@@ -7,6 +7,7 @@ import React, { useState } from 'react';
 import { Modal } from '../ui/Modal';
 import { UploadCloud, FileSpreadsheet, AlertCircle, X } from 'lucide-react';
 import { useToast } from '../../context/ToastContext';
+import { studentsService } from '../../services/students.service';
 
 interface StudentImportModalProps {
   isOpen: boolean;
@@ -14,23 +15,24 @@ interface StudentImportModalProps {
 }
 
 export const StudentImportModal: React.FC<StudentImportModalProps> = ({ isOpen, onClose }) => {
-  const { showBackendNotConnected } = useToast();
+  const { showToast } = useToast();
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<{ total_rows:number; valid_rows:number; invalid_rows:number } | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setSelectedFileName(e.target.files[0].name);
+      setFile(e.target.files[0]); setPreview(null);
     }
   };
 
-  const handleImportSubmit = () => {
-    if (!selectedFileName) return;
-    showBackendNotConnected(
-      'Backend belum terhubung. File impor siswa belum dapat diproses oleh server.'
-    );
-    setSelectedFileName(null);
-    onClose();
+  const handleImportSubmit = async () => {
+    if (!file || !preview || preview.invalid_rows) return;
+    setBusy(true); try { await studentsService.importStudents(file); showToast({ type: 'success', message: 'Data siswa berhasil diimpor.' }); setSelectedFileName(null); setFile(null); setPreview(null); onClose(); } catch (e) { showToast({ type: 'error', message: e instanceof Error ? e.message : 'Impor gagal.' }); } finally { setBusy(false); }
   };
+  const handlePreview = async () => { if (!file) return; setBusy(true); try { setPreview(await studentsService.previewImport(file)); } catch (e) { showToast({ type: 'error', message: e instanceof Error ? e.message : 'Preview gagal.' }); } finally { setBusy(false); } };
 
   return (
     <Modal
@@ -67,7 +69,7 @@ export const StudentImportModal: React.FC<StudentImportModalProps> = ({ isOpen, 
             </div>
             <button
               type="button"
-              onClick={() => setSelectedFileName(null)}
+            onClick={() => { setSelectedFileName(null); setFile(null); setPreview(null); }}
               className="text-slate-400 hover:text-slate-600 p-1"
               aria-label="Batalkan pilihan berkas"
             >
@@ -80,12 +82,15 @@ export const StudentImportModal: React.FC<StudentImportModalProps> = ({ isOpen, 
         <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 flex items-start gap-2.5">
           <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
           <p className="leading-relaxed">
-            Pemrosesan batch dan validasi NIS ganda memerlukan FastAPI backend dan koneksi basis data SQLite yang aktif.
+            CSV akan divalidasi dulu. Impor hanya tersedia jika semua baris valid.
           </p>
         </div>
 
         {/* Actions */}
         <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2.5">
+          {preview && <p className="mr-auto text-xs text-slate-600">{preview.total_rows} baris · {preview.valid_rows} valid · {preview.invalid_rows} invalid</p>}
+          <button type="button" onClick={() => studentsService.downloadTemplate().catch((e) => showToast({ type: 'error', message: e.message }))} className="px-3 py-2 text-xs text-blue-700">Template CSV</button>
+          <button type="button" disabled={!file || busy} onClick={handlePreview} className="px-3 py-2 text-xs text-blue-700 disabled:opacity-40">Preview</button>
           <button
             type="button"
             onClick={onClose}
@@ -95,7 +100,7 @@ export const StudentImportModal: React.FC<StudentImportModalProps> = ({ isOpen, 
           </button>
           <button
             type="button"
-            disabled={!selectedFileName}
+            disabled={!selectedFileName || !preview || preview.invalid_rows > 0 || busy}
             onClick={handleImportSubmit}
             className="px-4 py-2 text-xs sm:text-sm font-medium text-white bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-40 disabled:cursor-not-allowed rounded-lg shadow-xs transition-colors"
           >

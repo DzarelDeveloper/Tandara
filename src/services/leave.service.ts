@@ -1,7 +1,10 @@
 /**
  * Tandara Leave Requests Service (Guru/Piket review)
  * Typed for future FastAPI endpoints:
- * GET    /api/v1/leave-requests
+ * GET    /api/leave-requests
+ * GET    /api/leave-requests
+  const requests = await apiRequest<LeaveRequest[]>('/api/leave-requests');
+  body: JSON.stringify({ notes }),
  * POST   /api/v1/leave-requests/:id/approve
  * POST   /api/v1/leave-requests/:id/reject
  */

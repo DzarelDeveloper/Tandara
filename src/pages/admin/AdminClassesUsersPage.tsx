@@ -3,7 +3,7 @@
  * Route: /admin/classes-users
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { School, UserPlus, Users, Clock, Plus, Shield, Check } from 'lucide-react';
 import { PageHeader } from '../../components/ui/PageHeader';
@@ -13,6 +13,8 @@ import { ClassFormModal } from '../../components/admin/ClassFormModal';
 import { UserFormModal } from '../../components/admin/UserFormModal';
 import { useToast } from '../../context/ToastContext';
 import { Class, User } from '../../types';
+import { classesService } from '../../services/classes.service';
+import { usersService } from '../../services/users.service';
 
 interface ScheduleFormValues {
   checkInTime: string;
@@ -27,6 +29,8 @@ export const AdminClassesUsersPage: React.FC = () => {
 
   const [showClassModal, setShowClassModal] = useState(false);
   const [showUserModal, setShowUserModal] = useState(false);
+  const [classes, setClasses] = useState<Class[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
 
   // Attendance schedule configuration state with time validation
   const {
@@ -45,6 +49,9 @@ export const AdminClassesUsersPage: React.FC = () => {
   const checkIn = watch('checkInTime');
   const lateTol = watch('lateToleranceTime');
   const checkOut = watch('checkOutTime');
+  const loadClasses = async () => { try { setClasses(await classesService.getClasses()); } catch (error) { showBackendNotConnected(error instanceof Error ? error.message : 'Gagal memuat kelas.'); } };
+  const loadUsers = async () => { try { setUsers(await usersService.getUsers()); } catch (error) { showBackendNotConnected(error instanceof Error ? error.message : 'Gagal memuat pengguna.'); } };
+  useEffect(() => { void loadClasses(); void loadUsers(); }, []);
 
   let scheduleError = '';
   if (lateTol && checkIn && lateTol <= checkIn) {
@@ -71,9 +78,7 @@ export const AdminClassesUsersPage: React.FC = () => {
       header: 'Aksi',
       className: 'text-right',
       render: () => (
-        <button type="button" className="text-xs text-blue-600 hover:text-blue-800 font-medium">
-          Kelola
-        </button>
+        <span className="text-xs text-slate-400">Edit/hapus belum tersedia</span>
       ),
     },
   ];
@@ -97,9 +102,9 @@ export const AdminClassesUsersPage: React.FC = () => {
     {
       key: 'role',
       header: 'Role',
-      render: () => (
+      render: (item) => (
         <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-teal-50 text-teal-800 border border-teal-200">
-          Guru / Piket
+          {item.role}
         </span>
       ),
     },
@@ -129,16 +134,13 @@ export const AdminClassesUsersPage: React.FC = () => {
       key: 'actions',
       header: 'Aksi',
       className: 'text-right',
-      render: () => (
-        <button type="button" className="text-xs text-[#2563EB] hover:text-[#1D4ED8] font-medium">
-          Edit
+      render: (item) => (
+        <button type="button" onClick={async () => { try { await usersService.toggleUserStatus(item.id, !item.isActive); await loadUsers(); } catch (error) { showBackendNotConnected(error instanceof Error ? error.message : 'Gagal memperbarui status pengguna.'); } }} className="text-xs text-[#2563EB] hover:text-[#1D4ED8] font-medium">
+          {item.isActive ? 'Nonaktifkan' : 'Aktifkan'}
         </button>
       ),
     },
   ];
-
-  const classes: Class[] = [];
-  const users: User[] = [];
 
   return (
     <div className="space-y-6">
@@ -150,8 +152,6 @@ export const AdminClassesUsersPage: React.FC = () => {
           { label: 'Kelas & Pengguna' },
         ]}
       />
-
-      <BackendDisconnected moduleName="Modul Kelas & Pengguna" />
 
       {/* Navigation Tabs */}
       <div className="flex items-center gap-2 border-b border-slate-200 pb-px">
@@ -187,9 +187,9 @@ export const AdminClassesUsersPage: React.FC = () => {
           {/* Action Row */}
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Kelas: —</span>
+              <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Kelas: {classes.length}</span>
               <span className="text-slate-300">|</span>
-              <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Jurusan: —</span>
+              <span className="text-xs font-medium text-slate-500 uppercase tracking-wider">Total Jurusan: {new Set(classes.map((item) => item.major)).size}</span>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -216,7 +216,7 @@ export const AdminClassesUsersPage: React.FC = () => {
           {/* Classes Empty Table */}
           <DataTable
             columns={classColumns}
-            data={classes}
+              data={classes}
             emptyTitle="Belum ada data kelas atau jurusan."
             emptyDescription="Tambahkan struktur kelas untuk mulai memetakan siswa dan jadwal absensi."
             emptyActionText="Tambah Kelas Pertama"
@@ -346,8 +346,8 @@ export const AdminClassesUsersPage: React.FC = () => {
       )}
 
       {/* Modals */}
-      <ClassFormModal isOpen={showClassModal} onClose={() => setShowClassModal(false)} />
-      <UserFormModal isOpen={showUserModal} onClose={() => setShowUserModal(false)} />
+      <ClassFormModal isOpen={showClassModal} onClose={() => setShowClassModal(false)} onCreated={loadClasses} />
+      <UserFormModal isOpen={showUserModal} onClose={() => setShowUserModal(false)} onCreated={loadUsers} />
     </div>
   );
 };

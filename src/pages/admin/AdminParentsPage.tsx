@@ -3,7 +3,7 @@
  * Route: /admin/parents
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { UserPlus, HeartHandshake, ShieldCheck, Bell, Users } from 'lucide-react';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { FilterBar } from '../../components/ui/FilterBar';
@@ -12,6 +12,8 @@ import { BackendDisconnected } from '../../components/ui/BackendDisconnected';
 import { ParentFormModal } from '../../components/admin/ParentFormModal';
 import { ParentDetailDrawer } from '../../components/admin/ParentDetailDrawer';
 import { Parent } from '../../types';
+import { parentsService } from '../../services/parents.service';
+import { useToast } from '../../context/ToastContext';
 
 export const AdminParentsPage: React.FC = () => {
   const [search, setSearch] = useState('');
@@ -19,6 +21,17 @@ export const AdminParentsPage: React.FC = () => {
 
   const [showParentModal, setShowParentModal] = useState(false);
   const [selectedParent, setSelectedParent] = useState<Parent | null>(null);
+  const [parents, setParents] = useState<Parent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const { showToast } = useToast();
+
+  const loadParents = async () => {
+    setLoading(true);
+    try { setParents(await parentsService.getParents()); }
+    catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal memuat data wali.' }); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void loadParents(); }, []);
 
   const kpis = [
     { label: 'Total Akun', value: '—', icon: Users, color: 'text-blue-600' },
@@ -99,8 +112,11 @@ export const AdminParentsPage: React.FC = () => {
     },
   ];
 
-  // No fake parent accounts
-  const parents: Parent[] = [];
+  const filteredParents = useMemo(() => parents.filter((parent) => {
+    const matchesSearch = !search || `${parent.fullName} ${parent.phone}`.toLowerCase().includes(search.toLowerCase());
+    const matchesStatus = !selectedStatus || parent.accountStatus === selectedStatus;
+    return matchesSearch && matchesStatus;
+  }), [parents, search, selectedStatus]);
 
   const handleResetFilters = () => {
     setSearch('');
@@ -129,8 +145,6 @@ export const AdminParentsPage: React.FC = () => {
           </button>
         }
       />
-
-      <BackendDisconnected moduleName="Basis Data Akun Orang Tua" />
 
       {/* KPI Cards with '—' values */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -180,8 +194,8 @@ export const AdminParentsPage: React.FC = () => {
       {/* Data Table */}
       <DataTable
         columns={columns}
-        data={parents}
-        emptyTitle="Belum ada akun orang tua."
+        data={filteredParents}
+        emptyTitle={loading ? 'Memuat data wali...' : 'Belum ada akun orang tua.'}
         emptyDescription="Akun orang tua akan muncul setelah data tersimpan di backend."
         emptyActionText="Tambah Akun Orang Tua"
         onEmptyAction={() => setShowParentModal(true)}
@@ -193,6 +207,7 @@ export const AdminParentsPage: React.FC = () => {
         isOpen={selectedParent !== null}
         onClose={() => setSelectedParent(null)}
         parent={selectedParent}
+        onChanged={loadParents}
       />
     </div>
   );
