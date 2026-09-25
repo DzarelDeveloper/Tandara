@@ -1,13 +1,11 @@
 from fastapi.testclient import TestClient
 from argon2 import PasswordHasher
 from app.full import app
-from app.database import Base, engine, SessionLocal
+from app.database import SessionLocal
 from app.models import User, ClassRoom, Student
 
 
 def test_admin_can_open_session_and_record_manual_attendance():
-    Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
     db = SessionLocal()
     admin = User(full_name='Admin Test', username='admin-test', password_hash=PasswordHasher().hash('password-aman'), role='ADMIN_IT')
     classroom = ClassRoom(name='X-A', grade='10', major='Umum', school_year='2026')
