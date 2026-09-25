@@ -59,7 +59,6 @@ app.include_router(imports_router)
 def health(): return {'success':True,'message':'Backend Tandara aktif','data':{'face_recognition':'NOT_CONFIGURED'}}
 # Register attendance, leave, and WebSocket routes in the default ASGI app too.
 # This keeps `uvicorn app.main:app` and the test entrypoint behaviour identical.
-from . import full as _full
 from .routers.dashboards import router as dashboards_router
 from .routers.reports import router as reports_router
 from .routers.audit_logs import router as audit_logs_router
@@ -71,6 +70,7 @@ from .routers.students import router as students_router
 from .routers.classes import router as classes_router
 from .routers.users import router as users_router
 from .routers.auth import router as auth_router
+from .routers.websocket import router as websocket_router
 app.include_router(dashboards_router)
 app.include_router(reports_router)
 app.include_router(audit_logs_router)
@@ -82,3 +82,4 @@ app.include_router(students_router)
 app.include_router(classes_router)
 app.include_router(users_router)
 app.include_router(auth_router)
+app.include_router(websocket_router)
