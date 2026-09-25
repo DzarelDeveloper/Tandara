@@ -1,9 +1,8 @@
 from contextlib import asynccontextmanager
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
 import jwt
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
 from fastapi import FastAPI, Depends, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -17,7 +16,6 @@ TZ=ZoneInfo(settings.timezone); pwd=PasswordHasher(); clients:set[WebSocket]=set
 def localnow(): return datetime.now(TZ).replace(tzinfo=None)
 def error(code,msg,code_name='VALIDATION_ERROR'): raise HTTPException(code, {'success':False,'message':msg,'errors':{},'code':code_name})
 def audit(db,u,action,typ,eid,desc): db.add(AuditLog(user_id=u.id if u else None,action=action,entity_type=typ,entity_id=str(eid) if eid else None,description=desc))
-def token(user): return jwt.encode({'sub':str(user.id),'role':user.role,'exp':datetime.utcnow()+timedelta(minutes=settings.access_token_expire_minutes)},settings.secret_key,algorithm='HS256')
 def current_user(authorization: str|None = None, db:Session=Depends(get_db)):
     from fastapi import Header
     # Header injection is wired below through dependency wrapper.
@@ -41,7 +39,6 @@ def require(*roles):
         return u
     return dep
 def attendance_out(a): return {'id':str(a.id),'date':a.attendance_date.isoformat(),'studentId':str(a.student_id),'studentName':a.student.full_name,'nis':a.student.nis,'className':a.student.classroom.name,'checkInTime':a.check_in_time.isoformat() if a.check_in_time else None,'checkOutTime':a.check_out_time.isoformat() if a.check_out_time else None,'status':a.status,'isCorrected':bool(a.notes),'correctionReason':a.notes,'parentNotified':False}
-class Login(BaseModel): username:str; password:str
 class GuardianIn(BaseModel): full_name:str; phone_number:str=Field(pattern=r'^(\+62|62|0)\d{8,13}$')
 class SessionIn(BaseModel): mode:str; camera_source:str=str(settings.camera_source)
 class ManualIn(BaseModel): student_id:int; mode:str; reason:str=Field(min_length=3); captured_at:datetime|None=None
@@ -60,19 +57,6 @@ from .routers.imports import router as imports_router
 app.include_router(imports_router)
 @app.get('/api/health')
 def health(): return {'success':True,'message':'Backend Tandara aktif','data':{'face_recognition':'NOT_CONFIGURED'}}
-@app.post('/api/auth/login')
-def login(body:Login,db:Session=Depends(get_db)):
-    u=db.scalar(select(User).where(User.username==body.username.strip()))
-    if not u or not u.is_active:
-        error(401,'Username atau password tidak sesuai.','INVALID_CREDENTIALS')
-    try: pwd.verify(u.password_hash,body.password)
-    except VerifyMismatchError: error(401,'Username atau password tidak sesuai.','INVALID_CREDENTIALS')
-    u.last_login_at=localnow(); audit(db,u,'LOGIN','User',u.id,'Pengguna login'); db.commit()
-    return {'success':True,'data':{'access_token':token(u),'token_type':'bearer','user':{'id':str(u.id),'username':u.username,'displayName':u.full_name,'role':u.role,'isActive':u.is_active}}}
-@app.post('/api/auth/logout')
-def logout(u=Depends(user_dep),db:Session=Depends(get_db)): audit(db,u,'LOGOUT','User',u.id,'Pengguna logout'); db.commit(); return {'success':True,'message':'Logout berhasil'}
-@app.get('/api/auth/me')
-def me(u=Depends(user_dep)): return {'success':True,'data':{'id':str(u.id),'username':u.username,'displayName':u.full_name,'role':u.role,'isActive':u.is_active}}
 # Register attendance, leave, and WebSocket routes in the default ASGI app too.
 # This keeps `uvicorn app.main:app` and the test entrypoint behaviour identical.
 from . import full as _full
@@ -86,6 +70,7 @@ from .routers.attendance import router as attendance_router
 from .routers.students import router as students_router
 from .routers.classes import router as classes_router
 from .routers.users import router as users_router
+from .routers.auth import router as auth_router
 app.include_router(dashboards_router)
 app.include_router(reports_router)
 app.include_router(audit_logs_router)
@@ -96,3 +81,4 @@ app.include_router(attendance_router)
 app.include_router(students_router)
 app.include_router(classes_router)
 app.include_router(users_router)
+app.include_router(auth_router)
