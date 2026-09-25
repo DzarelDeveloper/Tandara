@@ -7,7 +7,7 @@ from argon2.exceptions import VerifyMismatchError
 from fastapi import FastAPI, Depends, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from .config import settings
@@ -44,7 +44,6 @@ def require(*roles):
 def attendance_out(a): return {'id':str(a.id),'date':a.attendance_date.isoformat(),'studentId':str(a.student_id),'studentName':a.student.full_name,'nis':a.student.nis,'className':a.student.classroom.name,'checkInTime':a.check_in_time.isoformat() if a.check_in_time else None,'checkOutTime':a.check_out_time.isoformat() if a.check_out_time else None,'status':a.status,'isCorrected':bool(a.notes),'correctionReason':a.notes,'parentNotified':False}
 class Login(BaseModel): username:str; password:str
 class UserIn(BaseModel): full_name:str=Field(min_length=2); username:str=Field(min_length=3); password:str=Field(min_length=8); role:str='GURU_PIKET'; is_active:bool=True
-class ClassIn(BaseModel): name:str; grade:str; major:str; school_year:str
 class GuardianIn(BaseModel): full_name:str; phone_number:str=Field(pattern=r'^(\+62|62|0)\d{8,13}$')
 class SessionIn(BaseModel): mode:str; camera_source:str=str(settings.camera_source)
 class ManualIn(BaseModel): student_id:int; mode:str; reason:str=Field(min_length=3); captured_at:datetime|None=None
@@ -90,16 +89,6 @@ def user_status(id:int,active:bool,db:Session=Depends(get_db),u=Depends(require(
     x=db.get(User,id)
     if not x:error(404,'User tidak ditemukan.','NOT_FOUND')
     x.is_active=active; audit(db,u,'STATUS_CHANGE','User',id,'Status user diubah');db.commit();return {'success':True}
-@app.get('/api/classes')
-def classes(db:Session=Depends(get_db),u=Depends(user_dep)):
-    return {'success':True,'data':[{'id':str(x.id),'name':x.name,'grade':x.grade,'major':x.major,'schoolYear':x.school_year,'isActive':x.is_active,'studentCount':db.scalar(select(func.count()).select_from(Student).where(Student.class_id==x.id))} for x in db.scalars(select(ClassRoom)).all()]}
-@app.post('/api/classes')
-def create_class(body:ClassIn,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT'))):
-    x=ClassRoom(**body.model_dump());db.add(x)
-    try:db.flush()
-    except IntegrityError:db.rollback();error(409,'Nama kelas sudah digunakan.','CLASS_EXISTS')
-    audit(db,u,'CREATE','ClassRoom',x.id,'Menambah kelas');db.commit();return {'success':True,'data':{'id':str(x.id),'name':x.name}}
-
 # Register attendance, leave, and WebSocket routes in the default ASGI app too.
 # This keeps `uvicorn app.main:app` and the test entrypoint behaviour identical.
 from . import full as _full
@@ -111,6 +100,7 @@ from .routers.leave_requests import router as leave_requests_router
 from .routers.attendance_sessions import router as attendance_sessions_router
 from .routers.attendance import router as attendance_router
 from .routers.students import router as students_router
+from .routers.classes import router as classes_router
 app.include_router(dashboards_router)
 app.include_router(reports_router)
 app.include_router(audit_logs_router)
@@ -119,3 +109,4 @@ app.include_router(leave_requests_router)
 app.include_router(attendance_sessions_router)
 app.include_router(attendance_router)
 app.include_router(students_router)
+app.include_router(classes_router)
