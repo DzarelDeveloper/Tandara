@@ -1,20 +1,18 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
-import csv, io
 import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
-from fastapi import FastAPI, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from .config import settings
 from .database import Base, engine, get_db
-from .models import User, ClassRoom, Guardian, Student, FaceEnrollment, AttendanceSession, Attendance, LeaveRequest, AuditLog
+from .models import User, ClassRoom, Guardian, Student, AttendanceSession, Attendance, LeaveRequest, AuditLog
 
 TZ=ZoneInfo(settings.timezone); pwd=PasswordHasher(); clients:set[WebSocket]=set()
 def localnow(): return datetime.now(TZ).replace(tzinfo=None)
@@ -43,13 +41,11 @@ def require(*roles):
         if u.role not in roles: error(403,'Anda tidak memiliki akses untuk aksi ini.','FORBIDDEN')
         return u
     return dep
-def student_out(s): return {'id':str(s.id),'nis':s.nis,'fullName':s.full_name,'classId':str(s.class_id),'className':s.classroom.name,'major':s.classroom.major,'gender':s.gender,'parentName':s.guardian.full_name if s.guardian else '', 'parentPhone':s.guardian.phone_number if s.guardian else '', 'faceRegistered':s.face_enrollment_status=='REGISTERED','status':'ACTIVE' if s.is_active else 'INACTIVE','createdAt':s.created_at.isoformat(),'updatedAt':s.updated_at.isoformat()}
 def attendance_out(a): return {'id':str(a.id),'date':a.attendance_date.isoformat(),'studentId':str(a.student_id),'studentName':a.student.full_name,'nis':a.student.nis,'className':a.student.classroom.name,'checkInTime':a.check_in_time.isoformat() if a.check_in_time else None,'checkOutTime':a.check_out_time.isoformat() if a.check_out_time else None,'status':a.status,'isCorrected':bool(a.notes),'correctionReason':a.notes,'parentNotified':False}
 class Login(BaseModel): username:str; password:str
 class UserIn(BaseModel): full_name:str=Field(min_length=2); username:str=Field(min_length=3); password:str=Field(min_length=8); role:str='GURU_PIKET'; is_active:bool=True
 class ClassIn(BaseModel): name:str; grade:str; major:str; school_year:str
 class GuardianIn(BaseModel): full_name:str; phone_number:str=Field(pattern=r'^(\+62|62|0)\d{8,13}$')
-class StudentIn(BaseModel): nis:str; full_name:str; class_id:int; guardian_id:int|None=None; gender:str|None=None; is_active:bool=True
 class SessionIn(BaseModel): mode:str; camera_source:str=str(settings.camera_source)
 class ManualIn(BaseModel): student_id:int; mode:str; reason:str=Field(min_length=3); captured_at:datetime|None=None
 class ScanIn(BaseModel): session_id:int; student_id:int; confidence_score:float=Field(ge=0,le=1); captured_at:datetime|None=None
@@ -103,36 +99,6 @@ def create_class(body:ClassIn,db:Session=Depends(get_db),u=Depends(require('ADMI
     try:db.flush()
     except IntegrityError:db.rollback();error(409,'Nama kelas sudah digunakan.','CLASS_EXISTS')
     audit(db,u,'CREATE','ClassRoom',x.id,'Menambah kelas');db.commit();return {'success':True,'data':{'id':str(x.id),'name':x.name}}
-@app.get('/api/students')
-def students(q:str='',class_id:int|None=None,face_status:str|None=None,page:int=1,page_size:int=50,db:Session=Depends(get_db),u=Depends(user_dep)):
-    s=select(Student).where(Student.is_active==True)
-    if q:s=s.where(or_(Student.nis.contains(q),Student.full_name.contains(q)))
-    if class_id:s=s.where(Student.class_id==class_id)
-    if face_status:s=s.where(Student.face_enrollment_status==face_status)
-    rows=db.scalars(s.offset((page-1)*page_size).limit(page_size)).all();return {'success':True,'data':[student_out(x) for x in rows]}
-@app.post('/api/students')
-def create_student(body:StudentIn,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT'))):
-    if not db.get(ClassRoom,body.class_id):error(422,'Kelas tidak ditemukan.')
-    x=Student(**body.model_dump());db.add(x)
-    try:db.flush()
-    except IntegrityError:db.rollback();error(409,'NIS sudah digunakan.','NIS_EXISTS')
-    audit(db,u,'CREATE','Student',x.id,'Menambah siswa');db.commit();db.refresh(x);return {'success':True,'data':student_out(x)}
-@app.get('/api/students/{id}')
-def get_student(id:int,db:Session=Depends(get_db),u=Depends(user_dep)):
-    x=db.get(Student,id)
-    if not x:error(404,'Siswa tidak ditemukan.','NOT_FOUND')
-    return {'success':True,'data':student_out(x)}
-@app.patch('/api/students/{id}')
-def update_student(id:int,body:StudentIn,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT'))):
-    x=db.get(Student,id)
-    if not x:error(404,'Siswa tidak ditemukan.','NOT_FOUND')
-    for k,v in body.model_dump().items():setattr(x,k,v)
-    audit(db,u,'UPDATE','Student',id,'Memperbarui siswa');db.commit();db.refresh(x);return {'success':True,'data':student_out(x)}
-@app.delete('/api/students/{id}')
-def delete_student(id:int,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT'))):
-    x=db.get(Student,id)
-    if not x:error(404,'Siswa tidak ditemukan.','NOT_FOUND')
-    x.is_active=False;audit(db,u,'DEACTIVATE','Student',id,'Menonaktifkan siswa');db.commit();return {'success':True}
 
 # Register attendance, leave, and WebSocket routes in the default ASGI app too.
 # This keeps `uvicorn app.main:app` and the test entrypoint behaviour identical.
@@ -144,6 +110,7 @@ from .routers.guardians import router as guardians_router
 from .routers.leave_requests import router as leave_requests_router
 from .routers.attendance_sessions import router as attendance_sessions_router
 from .routers.attendance import router as attendance_router
+from .routers.students import router as students_router
 app.include_router(dashboards_router)
 app.include_router(reports_router)
 app.include_router(audit_logs_router)
@@ -151,3 +118,4 @@ app.include_router(guardians_router)
 app.include_router(leave_requests_router)
 app.include_router(attendance_sessions_router)
 app.include_router(attendance_router)
+app.include_router(students_router)
