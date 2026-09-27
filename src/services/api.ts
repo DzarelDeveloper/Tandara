@@ -13,6 +13,18 @@ export class BackendDisconnectedError extends Error {
   }
 }
 
+export class ApiError extends Error {
+  code?: string;
+  status: number;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
 /**
  * Common fetch helper that throws BackendDisconnectedError when the FastAPI server is not responding.
  */
@@ -35,7 +47,8 @@ export async function apiRequest<T>(
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const detail = errorData?.detail;
-      throw new Error(typeof detail === 'object' ? (detail.message || `HTTP Error ${response.status}`) : (detail || `HTTP Error ${response.status}`));
+      const message = errorData?.message || (typeof detail === 'object' ? detail.message : detail) || (response.status === 401 ? 'Sesi login tidak valid atau telah berakhir.' : response.status === 403 ? 'Anda tidak memiliki izin untuk aksi ini.' : `HTTP Error ${response.status}`);
+      throw new ApiError(message, response.status, errorData?.code || detail?.code);
     }
 
     const payload = await response.json();
@@ -57,7 +70,8 @@ export async function apiRequestBlob(endpoint: string, options: RequestInit = {}
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const detail = errorData?.detail;
-      throw new Error(typeof detail === 'object' ? (detail.message || `HTTP Error ${response.status}`) : (detail || `HTTP Error ${response.status}`));
+      const message = errorData?.message || (typeof detail === 'object' ? detail.message : detail) || (response.status === 401 ? 'Sesi login tidak valid atau telah berakhir.' : response.status === 403 ? 'Anda tidak memiliki izin untuk aksi ini.' : `HTTP Error ${response.status}`);
+      throw new ApiError(message, response.status, errorData?.code || detail?.code);
     }
     return response;
   } catch (err: unknown) {

@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Outlet, useNavigate } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { AppSidebar } from '../components/layout/AppSidebar';
 import { TopHeader } from '../components/layout/TopHeader';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
@@ -20,11 +20,9 @@ export const DashboardLayout: React.FC = () => {
   const { logout, isAdmin } = useAuth();
   const { showToast } = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
 
-  // Desktop sidebar collapse preference
-  const [collapsed, setCollapsed] = useState(() => {
-    return localStorage.getItem('tandara_sidebar_collapsed') === 'true';
-  });
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('tandara-sidebar-collapsed') === 'true');
 
   // Mobile sidebar visibility
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -38,8 +36,17 @@ export const DashboardLayout: React.FC = () => {
   const [auditError, setAuditError] = useState('');
 
   useEffect(() => {
-    localStorage.setItem('tandara_sidebar_collapsed', String(collapsed));
-  }, [collapsed]);
+    localStorage.setItem('tandara-sidebar-collapsed', String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    if (!mobileSidebarOpen) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileSidebarOpen(false);
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [mobileSidebarOpen]);
 
   useEffect(() => {
     if (!showAuditModal) return;
@@ -59,7 +66,7 @@ export const DashboardLayout: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#F6F7F9] flex">
+    <div className="min-h-screen bg-[#F7F9FC] flex">
       {/* Mobile backdrop */}
       {mobileSidebarOpen && (
         <div
@@ -70,10 +77,10 @@ export const DashboardLayout: React.FC = () => {
       )}
 
       {/* Sidebar - Desktop and Mobile */}
-      <div className={`hidden lg:block shrink-0 ${collapsed ? 'w-20' : 'w-64'} transition-all duration-200`}>
+      <div className={`hidden lg:block shrink-0 transition-[width] duration-200 ${sidebarCollapsed ? 'w-[72px]' : 'w-56'}`}>
         <AppSidebar
-          collapsed={collapsed}
-          onToggleCollapse={() => setCollapsed((prev) => !prev)}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed((value) => !value)}
           onOpenAuditModal={() => setShowAuditModal(true)}
           onOpenHelpModal={() => setShowHelpModal(true)}
           onConfirmLogout={() => setShowLogoutConfirm(true)}
@@ -84,7 +91,7 @@ export const DashboardLayout: React.FC = () => {
       {mobileSidebarOpen && (
         <div className="fixed inset-y-0 left-0 z-50 lg:hidden">
           <AppSidebar
-            collapsed={false}
+            mobile
             onToggleCollapse={() => setMobileSidebarOpen(false)}
             onItemClick={() => setMobileSidebarOpen(false)}
             onOpenAuditModal={() => {
@@ -110,7 +117,7 @@ export const DashboardLayout: React.FC = () => {
           onConfirmLogout={() => setShowLogoutConfirm(true)}
         />
 
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
+        <main className={`flex-1 min-w-0 w-full mx-auto p-3.5 sm:p-5 lg:p-6 ${location.pathname === '/teacher/live-attendance' || location.pathname === '/admin/devices-system' ? 'max-w-[1600px]' : 'max-w-[1480px]'}`}>
           <Outlet />
         </main>
       </div>
@@ -121,7 +128,7 @@ export const DashboardLayout: React.FC = () => {
         onClose={() => setShowLogoutConfirm(false)}
         onConfirm={handleLogout}
         title="Keluar dari Sistem Tandara?"
-        description="Sesi prototipe Anda saat ini akan diakhiri dan Anda akan dikembalikan ke halaman login."
+        description="Sesi Anda akan diakhiri dan Anda akan dikembalikan ke halaman login."
         confirmLabel="Ya, Keluar"
         cancelLabel="Batal"
         isDestructive={true}
@@ -161,7 +168,7 @@ export const DashboardLayout: React.FC = () => {
                 Alur Presensi Wajah
               </div>
               <p className="text-xs text-blue-800 leading-relaxed">
-                Nyalakan sesi absensi di menu <strong>Absensi Langsung</strong>. Kamera (DroidCam) akan mendeteksi siswa secara otomatis. Setiap kehadiran akan langsung diteruskan ke aplikasi orang tua.
+                Nyalakan sesi absensi di menu <strong>Absensi Langsung</strong>. Kamera (DroidCam) akan mendeteksi siswa dan backend akan mencatat kehadiran secara otomatis. Notifikasi orang tua masih dalam pengembangan.
               </p>
             </div>
 

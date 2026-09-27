@@ -20,6 +20,7 @@ import { AdminStudentsPage } from '../pages/admin/AdminStudentsPage';
 import { AdminParentsPage } from '../pages/admin/AdminParentsPage';
 import { AdminClassesUsersPage } from '../pages/admin/AdminClassesUsersPage';
 import { AdminDevicesSystemPage } from '../pages/admin/AdminDevicesSystemPage';
+import { ParentDashboardPage } from '../pages/parent/ParentDashboardPage';
 
 // Guru / Piket Pages
 import { TeacherDashboardPage } from '../pages/teacher/TeacherDashboardPage';
@@ -51,6 +52,7 @@ const RootRedirect: React.FC = () => {
   if (session.role === 'TEACHER') {
     return <Navigate to="/teacher/dashboard" replace />;
   }
+  if (session.role === 'PARENT') return <Navigate to="/parent/dashboard" replace />;
 
   return <Navigate to="/login" replace />;
 };
@@ -80,6 +82,11 @@ export const AppRoutes: React.FC = () => {
         <Route path="parents" element={<AdminParentsPage />} />
         <Route path="classes-users" element={<AdminClassesUsersPage />} />
         <Route path="devices-system" element={<AdminDevicesSystemPage />} />
+      </Route>
+
+      <Route path="/parent" element={<ProtectedRoute allowedRole="PARENT"><DashboardLayout /></ProtectedRoute>}>
+        <Route index element={<Navigate to="/parent/dashboard" replace />} />
+        <Route path="dashboard" element={<ParentDashboardPage />} />
       </Route>
 
       {/* Teacher / Guru Piket Protected Routes (/teacher/*) */}

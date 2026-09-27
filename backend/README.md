@@ -24,6 +24,10 @@ copy .env.example .env
 .venv\Scripts\uvicorn app.main:app --reload --port 8000
 ```
 
-Set `VITE_API_BASE_URL=http://localhost:8000` pada `.env` frontend lalu jalankan `npm run dev`. Swagger tersedia di `/docs`.
+Set `VITE_API_URL=http://localhost:8000` dan opsional `VITE_SCAN_INTERVAL_MS=850` pada `.env` frontend lalu jalankan `npm run dev`. Swagger tersedia di `/docs`.
 
 `data/kena_scan.db`, `data/faces/`, dan `data/backups/` bersifat lokal dan tidak masuk Git. Folder wajah disiapkan untuk `data/faces/{student_id}/`; engine wajah belum dikonfigurasi dan sengaja tidak pernah mengembalikan identitas palsu. SQLite dan file wajah belum dienkripsi pada MVP lokal—amankan perangkat serta backup.
+
+Recognition SFace menggunakan cosine similarity dengan threshold awal `FACE_RECOGNITION_THRESHOLD=0.363`, mengacu pada ambang LFW yang dicantumkan dokumentasi resmi OpenCV. Nilai itu bukan kalibrasi untuk dataset sekolah; ukur false accept/reject dengan data enrollment lokal sebelum penggunaan operasional. Margin ambiguity dapat diatur dengan `FACE_RECOGNITION_AMBIGUITY_MARGIN` (default `0`, dinonaktifkan sampai dikalibrasi), dan scan berulang ditahan selama `FACE_SCAN_COOLDOWN_SECONDS` (default `4`).
+
+Untuk membuat akun demo hardware validation secara idempotent, set `APP_ENV=development` lalu jalankan `python -m app.cli.seed_demo`. Perintah ini ditolak pada environment production, tidak berjalan otomatis saat startup, dan tidak mengubah akun yang username-nya sudah ada.

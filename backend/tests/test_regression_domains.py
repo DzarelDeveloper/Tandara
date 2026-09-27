@@ -68,7 +68,7 @@ def test_guardian_crud_link_and_authorization(client, actors, headers, classroom
     assert client.patch(f'/api/guardians/{gid}', headers=headers['admin'], json={'full_name': 'Guardian Updated', 'phone_number': '081234567892'}).status_code == 200
     db = SessionLocal(); s = Student(nis='LINK-1', full_name='Linked', class_id=classroom); db.add(s); db.commit(); sid = s.id; db.close()
     assert client.post(f'/api/guardians/{gid}/students', headers=headers['admin'], json=[sid]).status_code == 200
-    assert client.patch(f'/api/guardians/{gid}/status', headers=headers['admin'], params={'active': 'false'}).status_code == 409
+    assert client.patch(f'/api/guardians/{gid}/status', headers=headers['admin'], params={'active': 'false'}).status_code == 200
 
 
 def test_students_crud_filters_history_and_audit(client, actors, headers, classroom, guardian):

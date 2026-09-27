@@ -14,6 +14,7 @@ from ..main import (
     localnow,
     require,
 )
+from ..services.face_engine import face_engine
 
 router = APIRouter(tags=['Dashboards'])
 
@@ -40,4 +41,4 @@ def teacher_dashboard(db: Session = Depends(get_db), u=Depends(require('ADMIN_IT
     records = db.scalars(select(Attendance).where(Attendance.attendance_date == today).order_by(Attendance.updated_at.desc()).limit(10)).all()
     active = db.scalar(select(AttendanceSession).where(AttendanceSession.status == 'ACTIVE').order_by(AttendanceSession.opened_at.desc()))
     present = sum(r.status in ('PRESENT', 'LATE') for r in records)
-    return {'success': True, 'data': {'session': None if not active else {'id': str(active.id), 'mode': active.mode, 'cameraSource': active.camera_source, 'status': active.status}, 'presentToday': db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date == today, Attendance.status.in_(['PRESENT', 'LATE']))) or 0, 'lateToday': db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date == today, Attendance.status == 'LATE')) or 0, 'excusedToday': db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date == today, Attendance.status.in_(['SICK', 'EXCUSED']))) or 0, 'notPresent': max(0, students - (db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date == today)) or 0)), 'recentAttendance': [attendance_out(x) for x in records], 'faceEngine': 'NOT_CONFIGURED'}}
+    return {'success': True, 'data': {'session': None if not active else {'id': str(active.id), 'mode': active.mode, 'cameraSource': active.camera_source, 'status': active.status}, 'presentToday': db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date == today, Attendance.status.in_(['PRESENT', 'LATE']))) or 0, 'lateToday': db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date == today, Attendance.status == 'LATE')) or 0, 'excusedToday': db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date == today, Attendance.status.in_(['SICK', 'EXCUSED']))) or 0, 'notPresent': max(0, students - (db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date == today)) or 0)), 'recentAttendance': [attendance_out(x) for x in records], 'faceEngine': face_engine.status.value}}

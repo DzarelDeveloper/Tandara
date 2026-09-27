@@ -7,7 +7,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { FilterBar } from '../../components/ui/FilterBar';
 import { DataTable, Column } from '../../components/ui/DataTable';
-import { BackendDisconnected } from '../../components/ui/BackendDisconnected';
 import { LeaveReviewDrawer } from '../../components/teacher/LeaveReviewDrawer';
 import { LeaveRequest } from '../../types';
 import { leaveService } from '../../services/leave.service';
@@ -224,7 +223,7 @@ export const TeacherLeaveRequestsPage: React.FC = () => {
         columns={columns}
         data={visibleRequests}
         emptyTitle="Belum ada pengajuan izin."
-        emptyDescription="Pengajuan dari aplikasi orang tua akan muncul di sini setelah backend terhubung."
+        emptyDescription="Belum ada pengajuan izin yang tersimpan pada backend."
       />
 
       {/* Review Drawer */}

@@ -1,12 +1,6 @@
 /**
  * Tandara Attendance Service
- * Typed for future FastAPI endpoints:
- * GET    /api/v1/attendance/today
- * GET    /api/v1/attendance/records
- * POST   /api/v1/attendance/session/start
- * POST   /api/v1/attendance/session/stop
- * POST   /api/v1/attendance/records/:id/correction
- * POST   /api/v1/attendance/reminders/send
+ * Real FastAPI attendance, session, scan, and WebSocket integration.
  */
 
 import { AttendanceRecord, AttendanceType } from '../types';
@@ -24,6 +18,22 @@ export interface AttendanceCorrectionPayload {
   checkInTime?: string;
   checkOutTime?: string;
   reason: string;
+}
+
+export interface FaceScanResult {
+  id: string;
+  date: string;
+  studentId: string;
+  studentName: string;
+  nis: string;
+  className: string;
+  mode: AttendanceType;
+  method: 'FACE';
+  similarity: number;
+  faceBox: { x: number; y: number; width: number; height: number } | null;
+  recordedAt: string;
+  checkInTime: string | null;
+  checkOutTime: string | null;
 }
 
 export const attendanceService = {
@@ -44,27 +54,28 @@ export const attendanceService = {
   },
   async getSummary(): Promise<{ today:number; students:number }> { return apiRequest('/api/attendance/summary'); },
 
-  async startLiveSession(payload: StartSessionPayload): Promise<{ sessionId: string; status: string }> {
-    const data = await apiRequest<{ id: string; status: string }>('/api/attendance-sessions/open', {
+  async startLiveSession(payload: StartSessionPayload): Promise<{ sessionId: string; mode: AttendanceType; status: string }> {
+    const data = await apiRequest<{ id: string; mode: AttendanceType; status: string }>('/api/attendance-sessions/open', {
       method: 'POST',
       body: JSON.stringify({ mode: payload.mode, camera_source: payload.cameraSource }),
     });
-    return { sessionId: data.id, status: data.status };
+    return { sessionId: data.id, mode: data.mode, status: data.status };
   },
 
   async stopLiveSession(sessionId: string): Promise<void> {
     await apiRequest(`/api/attendance-sessions/${sessionId}/close`, { method: 'POST' });
   },
 
+  async scanFrame(sessionId: string, frame: Blob, signal?: AbortSignal): Promise<FaceScanResult> {
+    const body = new FormData();
+    body.append('session_id', sessionId);
+    body.append('image', frame, 'frame.jpg');
+    return apiRequest<FaceScanResult>('/api/attendance/scan', { method: 'POST', body, signal });
+  },
+
   async submitCorrection(payload: AttendanceCorrectionPayload): Promise<void> {
     await apiRequest(`/api/attendance/${payload.recordId}/correction`, {
       method: 'PATCH', body: JSON.stringify({ status: payload.newStatus, notes: payload.reason, check_in_time: payload.checkInTime, check_out_time: payload.checkOutTime }),
-    });
-  },
-
-  async sendParentReminders(): Promise<{ sentCount: number }> {
-    return await apiRequest('/api/attendance/reminders/send', {
-      method: 'POST',
     });
   },
 };

@@ -1,30 +1,23 @@
 /**
  * Tandara Student Service
  * Typed for future FastAPI endpoints:
- * GET    /api/v1/students
- * POST   /api/v1/students
- * GET    /api/v1/students/:id
- * POST   /api/v1/students/:id/enroll-face
- * POST   /api/v1/students/import
+ * Real student and import endpoints.
  */
 
 import { Student } from '../types';
-import { apiRequest } from './api';
+import { apiRequest, apiRequestBlob } from './api';
 
 export interface CreateStudentPayload {
   fullName: string;
   nis: string;
-  className: string;
-  major: string;
   gender: 'L' | 'P';
-  parentName: string;
-  parentPhone: string;
-  status: 'ACTIVE' | 'GRADUATED' | 'TRANSFERRED' | 'INACTIVE';
+  classId: string;
+  guardianId?: string | null;
 }
 
 export const studentsService = {
   /**
-   * Fetch students list. Returns empty array in prototype when backend is offline.
+   * Fetch the active student list from FastAPI.
    */
   async getStudents(): Promise<Student[]> {
     return apiRequest<Student[]>('/api/students');
@@ -38,7 +31,7 @@ export const studentsService = {
     }
   },
 
-  async createStudent(payload: Omit<CreateStudentPayload, 'className'> & { classId: string; guardianId?: string | null }): Promise<Student> {
+  async createStudent(payload: CreateStudentPayload): Promise<Student> {
     return apiRequest<Student>('/api/students', { method: 'POST', body: JSON.stringify({
       nis: payload.nis, full_name: payload.fullName, class_id: Number(payload.classId), guardian_id: payload.guardianId ? Number(payload.guardianId) : null, gender: payload.gender,
     }) });
@@ -59,8 +52,7 @@ export const studentsService = {
     return apiRequest('/api/students/import/preview', { method: 'POST', body: formData });
   },
   async downloadTemplate(): Promise<void> {
-    const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:8000'}/api/students/import-template.csv`, { headers: { Authorization: `Bearer ${localStorage.getItem('tandara_access_token') || ''}` } });
-    if (!response.ok) throw new Error('Template tidak dapat diunduh.');
+    const response = await apiRequestBlob('/api/students/import-template.csv');
     const url = URL.createObjectURL(await response.blob()); const link = document.createElement('a'); link.href = url; link.download = 'tandara-template-siswa.csv'; link.click(); URL.revokeObjectURL(url);
   },
 };

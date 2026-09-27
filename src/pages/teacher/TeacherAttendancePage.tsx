@@ -10,22 +10,23 @@ import {
   AlertCircle,
   XCircle,
   Download,
-  Bell,
   AlertTriangle,
 } from 'lucide-react';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { FilterBar } from '../../components/ui/FilterBar';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { EmptyState } from '../../components/ui/EmptyState';
-import { BackendDisconnected } from '../../components/ui/BackendDisconnected';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { useToast } from '../../context/ToastContext';
 import { AttendanceRecord } from '../../types';
 import { attendanceService } from '../../services/attendance.service';
 import { CorrectionFormModal } from '../../components/teacher/CorrectionFormModal';
+import { reportsService } from '../../services/reports.service';
+import { classesService } from '../../services/classes.service';
+import { Class } from '../../types';
 
 export const TeacherAttendancePage: React.FC = () => {
-  const { showBackendNotConnected } = useToast();
+  const { showToast } = useToast();
 
   const [search, setSearch] = useState('');
   const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
@@ -35,14 +36,16 @@ export const TeacherAttendancePage: React.FC = () => {
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [summary, setSummary] = useState({ today: 0, students: 0 });
   const [selectedRecord, setSelectedRecord] = useState<AttendanceRecord | null>(null);
+  const [classes, setClasses] = useState<Class[]>([]);
   const load = () => Promise.all([attendanceService.getAttendanceRecords({ date_from: selectedDate, date_to: selectedDate, ...(selectedStatus ? { status: selectedStatus } : {}) }), attendanceService.getSummary()]).then(([rows, stats]) => { setAttendanceRecords(rows); setSummary(stats); });
   useEffect(() => { load().catch(() => undefined); }, [selectedDate, selectedStatus]);
+  useEffect(() => { classesService.getClasses().then(setClasses).catch(() => setClasses([])); }, []);
 
   const kpis = [
     { label: 'Presensi Hari Ini', value: String(summary.today), icon: CheckCircle2, color: 'text-emerald-600' },
     { label: 'Total Siswa', value: String(summary.students), icon: Clock, color: 'text-amber-600' },
-    { label: 'Izin / Sakit', value: '—', icon: AlertCircle, color: 'text-blue-600' },
-    { label: 'Belum Hadir', value: '—', icon: XCircle, color: 'text-red-600' },
+    { label: 'Izin / Sakit', value: String(attendanceRecords.filter((item) => ['SICK', 'PERMISSION'].includes(item.status)).length), icon: AlertCircle, color: 'text-blue-600' },
+    { label: 'Belum Hadir', value: String(Math.max(0, summary.students - attendanceRecords.length)), icon: XCircle, color: 'text-red-600' },
   ];
 
   const columns: Column<AttendanceRecord>[] = [
@@ -77,28 +80,11 @@ export const TeacherAttendancePage: React.FC = () => {
       render: (item) => <StatusBadge status={item.status} />,
     },
     {
-      key: 'parentNotified',
-      header: 'Notifikasi',
-      render: (item) => (
-        <span className="text-xs text-slate-500">
-          {item.parentNotified ? 'Terkirim ke Aplikasi Orang Tua' : 'Belum'}
-        </span>
-      ),
-    },
-    {
       key: 'actions',
       header: 'Aksi',
       className: 'text-right',
       render: (item) => (
         <div className="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={() => showBackendNotConnected('Lihat detail presensi memerlukan server aktif.')}
-            className="text-xs text-[#2563EB] hover:text-[#1D4ED8] font-medium"
-          >
-            Lihat Detail
-          </button>
-          <span className="text-slate-300">|</span>
           <button
             type="button"
             onClick={() => setSelectedRecord(item)}
@@ -112,14 +98,11 @@ export const TeacherAttendancePage: React.FC = () => {
   ];
 
 
-  const handleExportToday = () => {
-    showBackendNotConnected('Backend belum terhubung. Ekspor rekapitulasi kehadiran memerlukan data dari server.');
-  };
-
-  const handleSendReminder = () => {
-    showBackendNotConnected(
-      'Backend belum terhubung. Pengiriman notifikasi pengingat ke aplikasi orang tua belum dapat diproses.'
-    );
+  const handleExportToday = async () => {
+    try {
+      const response = await reportsService.downloadAttendanceCsv({ startDate: selectedDate, endDate: selectedDate, classId: selectedClass, status: selectedStatus });
+      const blob = await response.blob(); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'tandara-attendance.csv'; link.click(); URL.revokeObjectURL(link.href);
+    } catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal mengunduh laporan.' }); }
   };
 
   const handleResetFilters = () => {
@@ -151,19 +134,11 @@ export const TeacherAttendancePage: React.FC = () => {
               <Download className="w-4 h-4 text-slate-500" />
               Ekspor Hari Ini
             </button>
-            <button
-              type="button"
-              onClick={handleSendReminder}
-              className="inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors shadow-xs"
-            >
-              <Bell className="w-4 h-4 text-blue-600" />
-              Kirim Pengingat Orang Tua
-            </button>
+            <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">Notifikasi Orang Tua: Dalam Pengembangan</span>
           </div>
         }
       />
 
-      <BackendDisconnected moduleName="Modul Kehadiran Siswa" />
 
       {/* KPI Cards (All values '—') */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -172,14 +147,14 @@ export const TeacherAttendancePage: React.FC = () => {
           return (
             <div
               key={idx}
-              className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex items-center justify-between"
+              className="bg-white p-5 rounded-xl border border-slate-200 flex items-center justify-between"
             >
               <div>
                 <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">
                   {kpi.label}
                 </p>
                 <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 mt-1">{kpi.value}</p>
-                <p className="text-[11px] text-slate-400 mt-0.5">Data backend belum aktif</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">Data backend aktual</p>
               </div>
               <div className="w-10 h-10 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center shrink-0">
                 <Icon className={`w-5 h-5 ${kpi.color}`} />
@@ -212,9 +187,7 @@ export const TeacherAttendancePage: React.FC = () => {
           className="px-3 py-2 text-xs sm:text-sm bg-slate-50 hover:bg-slate-100/70 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
         >
           <option value="">Semua Tingkat</option>
-          <option value="10">Kelas 10</option>
-          <option value="11">Kelas 11</option>
-          <option value="12">Kelas 12</option>
+          {[...new Set(classes.map((item) => item.grade).filter(Boolean))].map((grade) => <option key={grade} value={grade}>{grade}</option>)}
         </select>
 
         <select
@@ -224,10 +197,7 @@ export const TeacherAttendancePage: React.FC = () => {
           className="px-3 py-2 text-xs sm:text-sm bg-slate-50 hover:bg-slate-100/70 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
         >
           <option value="">Semua Rombel</option>
-          <option value="X-A">X-A</option>
-          <option value="X-B">X-B</option>
-          <option value="XI-IPA-1">XI-IPA-1</option>
-          <option value="XII-IPA-1">XII-IPA-1</option>
+          {classes.filter((item) => !selectedGrade || item.grade === selectedGrade).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select>
 
         <select
@@ -251,7 +221,7 @@ export const TeacherAttendancePage: React.FC = () => {
         <div className="lg:col-span-3">
           <DataTable
             columns={columns}
-            data={attendanceRecords}
+            data={attendanceRecords.filter((item) => (!search || `${item.studentName} ${item.nis}`.toLowerCase().includes(search.toLowerCase())) && (!selectedClass || classes.find((entry) => entry.id === selectedClass)?.name === item.className))}
             emptyTitle="Belum ada data presensi untuk filter ini."
             emptyDescription="Data absensi wajah harian akan tersinkronisasi saat sesi absensi dijalankan di gerbang sekolah."
           />
@@ -273,7 +243,7 @@ export const TeacherAttendancePage: React.FC = () => {
           </div>
 
           <div className="pt-3 border-t border-slate-100 text-xs text-slate-500 leading-relaxed">
-            Notifikasi rekapitulasi kehadiran akhir jam masuk akan dikirimkan otomatis ke aplikasi orang tua.
+            Notifikasi orang tua masih dalam pengembangan dan belum dikirim otomatis.
           </div>
         </div>
       </div>

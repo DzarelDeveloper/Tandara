@@ -8,7 +8,6 @@ import { UserPlus, HeartHandshake, ShieldCheck, Bell, Users } from 'lucide-react
 import { PageHeader } from '../../components/ui/PageHeader';
 import { FilterBar } from '../../components/ui/FilterBar';
 import { DataTable, Column } from '../../components/ui/DataTable';
-import { BackendDisconnected } from '../../components/ui/BackendDisconnected';
 import { ParentFormModal } from '../../components/admin/ParentFormModal';
 import { ParentDetailDrawer } from '../../components/admin/ParentDetailDrawer';
 import { Parent } from '../../types';
@@ -27,17 +26,17 @@ export const AdminParentsPage: React.FC = () => {
 
   const loadParents = async () => {
     setLoading(true);
-    try { setParents(await parentsService.getParents()); }
+    try { const rows = await parentsService.getParents(); setParents(rows); setSelectedParent((current) => current ? rows.find((item) => item.id === current.id) ?? null : null); }
     catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal memuat data wali.' }); }
     finally { setLoading(false); }
   };
   useEffect(() => { void loadParents(); }, []);
 
   const kpis = [
-    { label: 'Total Akun', value: '—', icon: Users, color: 'text-blue-600' },
-    { label: 'Aktif', value: '—', icon: ShieldCheck, color: 'text-emerald-600' },
-    { label: 'Belum Aktivasi', value: '—', icon: HeartHandshake, color: 'text-amber-600' },
-    { label: 'Notifikasi Aktif', value: '—', icon: Bell, color: 'text-teal-600' },
+    { label: 'Total Akun', value: String(parents.length), icon: Users, color: 'text-blue-600' },
+    { label: 'Aktif', value: String(parents.filter((item) => item.accountStatus === 'ACTIVE').length), icon: ShieldCheck, color: 'text-emerald-600' },
+    { label: 'Nonaktif', value: String(parents.filter((item) => item.accountStatus === 'INACTIVE').length), icon: HeartHandshake, color: 'text-amber-600' },
+    { label: 'Siswa Terhubung', value: String(parents.reduce((total, item) => total + item.connectedStudentIds.length, 0)), icon: Bell, color: 'text-teal-600' },
   ];
 
   const columns: Column<Parent>[] = [
@@ -68,6 +67,11 @@ export const AdminParentsPage: React.FC = () => {
       ),
     },
     {
+      key: 'username',
+      header: 'Username',
+      render: (item) => <span className="font-mono text-xs">{item.username || '—'}</span>,
+    },
+    {
       key: 'accountStatus',
       header: 'Status Akun',
       render: (item) => (
@@ -87,7 +91,7 @@ export const AdminParentsPage: React.FC = () => {
               : 'bg-slate-100 text-slate-600 border border-slate-200'
           }`}
         >
-          {item.notificationsActive ? 'Aplikasi Aktif' : 'Nonaktif'}
+          Dalam Pengembangan
         </span>
       ),
     },
@@ -153,14 +157,14 @@ export const AdminParentsPage: React.FC = () => {
           return (
             <div
               key={idx}
-              className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex items-center justify-between"
+              className="bg-white p-5 rounded-xl border border-slate-200 flex items-center justify-between"
             >
               <div>
                 <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">
                   {kpi.label}
                 </p>
                 <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 mt-1">{kpi.value}</p>
-                <p className="text-[11px] text-slate-400 mt-0.5">Data backend belum aktif</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">Data backend</p>
               </div>
               <div className="w-10 h-10 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center shrink-0">
                 <Icon className={`w-5 h-5 ${kpi.color}`} />
@@ -202,7 +206,7 @@ export const AdminParentsPage: React.FC = () => {
       />
 
       {/* Modals & Drawers */}
-      <ParentFormModal isOpen={showParentModal} onClose={() => setShowParentModal(false)} />
+      <ParentFormModal isOpen={showParentModal} onClose={() => setShowParentModal(false)} onCreated={loadParents} />
       <ParentDetailDrawer
         isOpen={selectedParent !== null}
         onClose={() => setSelectedParent(null)}

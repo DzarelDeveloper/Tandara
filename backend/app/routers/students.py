@@ -5,6 +5,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..main import ClassRoom, Guardian, Student, audit, error, require, user_dep
+from ..services.face_recognition import face_recognition_service
+from ..models import GuardianAccount, GuardianStudent
 
 
 class StudentIn(BaseModel):
@@ -24,32 +26,47 @@ router=APIRouter(tags=['Students'])
 @router.get('/api/students')
 def students(q:str='',class_id:int|None=None,face_status:str|None=None,page:int=1,page_size:int=50,db:Session=Depends(get_db),u=Depends(user_dep)):
  s=select(Student).where(Student.is_active==True)
+ if u.role=='PARENT':
+  account=db.scalar(select(GuardianAccount).where(GuardianAccount.user_id==u.id))
+  if not account:return {'success':True,'data':[]}
+  s=s.join(GuardianStudent,GuardianStudent.student_id==Student.id).where(GuardianStudent.guardian_id==account.guardian_id)
  if q:s=s.where(or_(Student.nis.contains(q),Student.full_name.contains(q)))
  if class_id:s=s.where(Student.class_id==class_id)
  if face_status:s=s.where(Student.face_enrollment_status==face_status)
  return {'success':True,'data':[student_out(x) for x in db.scalars(s.offset((page-1)*page_size).limit(page_size)).all()]}
 @router.post('/api/students')
 def create_student(body:StudentIn,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT'))):
- if not db.get(ClassRoom,body.class_id):error(422,'Kelas tidak ditemukan.')
+ classroom=db.get(ClassRoom,body.class_id)
+ if not classroom or not classroom.is_active:error(422,'Kelas aktif tidak ditemukan.','CLASS_NOT_FOUND')
  if body.guardian_id is not None and not (guardian:=db.get(Guardian,body.guardian_id)) or body.guardian_id is not None and not guardian.is_active:error(422,'Wali aktif tidak ditemukan.','GUARDIAN_NOT_FOUND')
  x=Student(**body.model_dump());db.add(x)
  try:db.flush()
  except IntegrityError:db.rollback();error(409,'NIS sudah digunakan.','NIS_EXISTS')
+ if body.guardian_id is not None:db.add(GuardianStudent(guardian_id=body.guardian_id,student_id=x.id,relationship='Wali'))
  audit(db,u,'CREATE','Student',x.id,'Menambah siswa');db.commit();db.refresh(x);return {'success':True,'data':student_out(x)}
 @router.get('/api/students/{id}')
 def get_student(id:int,db:Session=Depends(get_db),u=Depends(user_dep)):
  x=db.get(Student,id)
  if not x:error(404,'Siswa tidak ditemukan.','NOT_FOUND')
+ if u.role=='PARENT':
+  account=db.scalar(select(GuardianAccount).where(GuardianAccount.user_id==u.id))
+  linked=account and db.scalar(select(GuardianStudent).where(GuardianStudent.guardian_id==account.guardian_id,GuardianStudent.student_id==id))
+  if not linked:error(404,'Siswa tidak ditemukan.','NOT_FOUND')
  return {'success':True,'data':student_out(x)}
 @router.patch('/api/students/{id}')
 def update_student(id:int,body:StudentIn,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT'))):
  x=db.get(Student,id)
  if not x:error(404,'Siswa tidak ditemukan.','NOT_FOUND')
+ classroom=db.get(ClassRoom,body.class_id)
+ if not classroom or not classroom.is_active:error(422,'Kelas aktif tidak ditemukan.','CLASS_NOT_FOUND')
  if body.guardian_id is not None and not (guardian:=db.get(Guardian,body.guardian_id)) or body.guardian_id is not None and not guardian.is_active:error(422,'Wali aktif tidak ditemukan.','GUARDIAN_NOT_FOUND')
  for k,v in body.model_dump().items():setattr(x,k,v)
- audit(db,u,'UPDATE','Student',id,'Memperbarui siswa');db.commit();db.refresh(x);return {'success':True,'data':student_out(x)}
+ if body.guardian_id is not None and not db.scalar(select(GuardianStudent).where(GuardianStudent.guardian_id==body.guardian_id,GuardianStudent.student_id==x.id)):db.add(GuardianStudent(guardian_id=body.guardian_id,student_id=x.id,relationship='Wali'))
+ audit(db,u,'UPDATE','Student',id,'Memperbarui siswa');db.commit();db.refresh(x)
+ if not x.is_active:face_recognition_service.invalidate(id)
+ return {'success':True,'data':student_out(x)}
 @router.delete('/api/students/{id}')
 def delete_student(id:int,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT'))):
  x=db.get(Student,id)
  if not x:error(404,'Siswa tidak ditemukan.','NOT_FOUND')
- x.is_active=False;audit(db,u,'DEACTIVATE','Student',id,'Menonaktifkan siswa');db.commit();return {'success':True}
+ x.is_active=False;audit(db,u,'DEACTIVATE','Student',id,'Menonaktifkan siswa');db.commit();face_recognition_service.invalidate(id);return {'success':True}

@@ -3,7 +3,7 @@
  * Drawer for inspecting parent account and performing administrative actions.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Drawer } from '../ui/Drawer';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { useToast } from '../../context/ToastContext';
@@ -31,8 +31,10 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
   const [editing, setEditing] = useState(false);
   const [fullName, setFullName] = useState(parent?.fullName || '');
   const [phone, setPhone] = useState(parent?.phone || '');
+  const [relationship, setRelationship] = useState(parent?.relationship || 'Wali');
   const [students, setStudents] = useState<Student[]>([]);
   const [studentId, setStudentId] = useState('');
+  useEffect(() => { setFullName(parent?.fullName || ''); setPhone(parent?.phone || ''); setRelationship(parent?.relationship || 'Wali'); }, [parent]);
 
   const handleActionConfirm = async () => {
     if (confirmAction === 'status' && parent) {
@@ -44,13 +46,13 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
 
   const handleSave = async () => {
     if (!parent) return;
-    try { await parentsService.updateParent(parent.id, { fullName, phone }); await onChanged(); setEditing(false); showToast({ type: 'success', message: 'Data wali berhasil diperbarui.' }); }
+    try { await parentsService.updateParent(parent.id, { fullName, phone, relationship }); await onChanged(); setEditing(false); showToast({ type: 'success', message: 'Data wali berhasil diperbarui.' }); }
     catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal memperbarui data wali.' }); }
   };
 
   const handleLinkStudent = async () => {
     if (!studentId || !parent) return;
-    try { await parentsService.linkStudent(parent.id, studentId); await onChanged(); setStudents([]); setStudentId(''); showToast({ type: 'success', message: 'Siswa berhasil dihubungkan.' }); }
+    try { await parentsService.linkStudents(parent.id, [studentId], relationship); await onChanged(); setStudents([]); setStudentId(''); showToast({ type: 'success', message: 'Siswa berhasil dihubungkan.' }); }
     catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal menghubungkan siswa.' }); }
   };
 
@@ -74,7 +76,7 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
               </div>
               <div>
                 {editing ? <input value={fullName} onChange={(event) => setFullName(event.target.value)} className="text-sm font-semibold text-slate-900 border rounded px-2 py-1" /> : <h4 className="text-sm font-semibold text-slate-900">{parent.fullName}</h4>}
-                <p className="text-xs text-slate-500">Hubungan: {parent.relationship}</p>
+                {editing ? <select value={relationship} onChange={(event) => setRelationship(event.target.value)} className="text-xs border rounded px-2 py-1 mt-1"><option>Ayah</option><option>Ibu</option><option>Wali</option><option>Lainnya</option></select> : <p className="text-xs text-slate-500">Hubungan: {parent.relationship}</p>}
               </div>
             </div>
 
@@ -117,8 +119,8 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
 
             {students.length > 0 && <div className="flex gap-2 mb-2"><select value={studentId} onChange={(event) => setStudentId(event.target.value)} className="flex-1 text-xs border rounded px-2 py-1"><option value="">Pilih siswa</option>{students.map((student) => <option key={student.id} value={student.id}>{student.fullName} ({student.nis})</option>)}</select><button type="button" onClick={handleLinkStudent} disabled={!studentId} className="text-xs font-semibold text-blue-600 disabled:opacity-50">Simpan</button></div>}
 
-            <div className="p-4 rounded-xl border border-dashed border-slate-200 bg-white text-xs text-slate-500">
-              {parent.connectedStudentNames.length ? parent.connectedStudentNames.join(', ') : 'Belum ada siswa terhubung.'}
+            <div className="rounded-xl border border-slate-200 bg-white text-xs text-slate-600 divide-y">
+              {parent.connectedStudents.length ? parent.connectedStudents.map((student) => <div key={student.id} className="flex justify-between gap-2 p-3"><span><strong className="block text-slate-800">{student.fullName}</strong>{student.nis} • {student.className}</span><button type="button" className="text-red-600" onClick={async () => { if (!window.confirm(`Lepas hubungan dengan ${student.fullName}?`)) return; try { await parentsService.unlinkStudent(parent.id, student.id); await onChanged(); showToast({ type: 'success', message: 'Hubungan siswa dilepas tanpa menghapus data siswa.' }); } catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal melepas siswa.' }); } }}>Lepas</button></div>) : <p className="p-4">Belum ada siswa terhubung.</p>}
             </div>
           </div>
 
@@ -127,7 +129,7 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
             <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 flex items-center justify-between text-xs">
               <div>
                 <span className="font-medium text-slate-800 block">Notifikasi Aplikasi Orang Tua</span>
-                <span className="text-[11px] text-slate-500">Pemberitahuan presensi harian otomatis</span>
+                <span className="text-[11px] text-amber-700">Dalam Pengembangan</span>
               </div>
               <span className="px-2 py-0.5 text-[11px] font-medium rounded bg-emerald-50 text-emerald-800 border border-emerald-200">
                 {parent.notificationsActive ? 'Aktif' : 'Tidak tersedia'}
@@ -174,7 +176,7 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
         onConfirm={handleActionConfirm}
         title="Ubah Status Akun Orang Tua?"
         description={
-          'Status akun akan diperbarui pada backend. Wali yang masih terhubung ke siswa aktif tidak dapat dinonaktifkan.'
+          'Status akun login orang tua akan diperbarui tanpa menghapus hubungan atau histori siswa.'
         }
         confirmLabel="Ubah Status"
         isDestructive={parent.accountStatus === 'ACTIVE'}

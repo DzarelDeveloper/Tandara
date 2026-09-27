@@ -61,7 +61,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
     >
       <div
         ref={dialogRef}
-        className="w-full max-w-md bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden transform transition-all"
+        className="w-full max-w-md bg-white rounded-xl shadow-md border border-slate-200 overflow-hidden transform transition-all"
       >
         <div className="p-6">
           <div className="flex items-start gap-4">
@@ -105,7 +105,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             type="button"
             onClick={onConfirm}
             disabled={isLoading}
-            className={`px-4 py-2 text-xs sm:text-sm font-medium text-white rounded-lg transition-colors focus:ring-2 focus:outline-none shadow-xs ${
+            className={`px-4 py-2 text-xs sm:text-sm font-medium text-white rounded-lg transition-colors focus:ring-2 focus:outline-none ${
               isDestructive
                 ? 'bg-red-600 hover:bg-red-700 focus:ring-red-500'
                 : 'bg-blue-600 hover:bg-blue-700 focus:ring-blue-500'

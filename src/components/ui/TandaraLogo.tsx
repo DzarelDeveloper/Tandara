@@ -34,7 +34,7 @@ export const TandaraLogo: React.FC<TandaraLogoProps> = ({
     <div className={`flex items-center gap-2.5 select-none ${className}`}>
       {/* Face Scan + Checkmark Emblem */}
       <div
-        className={`${iconSizeClasses[size]} relative flex items-center justify-center rounded-lg bg-[#2563EB] text-white shrink-0`}
+        className={`${iconSizeClasses[size]} relative flex items-center justify-center rounded-lg ${light ? 'bg-white text-[#2463EB]' : 'bg-[#2563EB] text-white'} shrink-0`}
         aria-hidden="true"
       >
         <svg
@@ -69,7 +69,7 @@ export const TandaraLogo: React.FC<TandaraLogoProps> = ({
           </div>
           <span
             className={`text-[10px] uppercase font-semibold tracking-wider mt-0.5 ${
-              light ? 'text-slate-400' : 'text-slate-500'
+              light ? 'text-blue-100' : 'text-slate-500'
             }`}
           >
             Presensi Wajah

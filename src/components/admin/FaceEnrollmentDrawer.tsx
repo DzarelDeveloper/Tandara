@@ -1,201 +1,126 @@
-/**
- * Tandara FaceEnrollmentDrawer
- * Biometric face enrollment interface for Admin IT.
- * Shows disconnected camera state without accessing the real webcam.
- */
-
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Camera, CameraOff, CheckCircle2, AlertCircle, ShieldCheck } from 'lucide-react';
 import { Drawer } from '../ui/Drawer';
-import { Modal } from '../ui/Modal';
-import { Camera, CameraOff, CheckCircle2, AlertCircle, Info, Video, ShieldCheck } from 'lucide-react';
-import { useToast } from '../../context/ToastContext';
+import { Student } from '../../types';
+import { faceEnrollmentService } from '../../services/face-enrollment.service';
 
 interface FaceEnrollmentDrawerProps {
   isOpen: boolean;
   onClose: () => void;
+  students: Student[];
+  selectedStudent: Student | null;
+  onCompleted: () => Promise<void>;
 }
 
-export const FaceEnrollmentDrawer: React.FC<FaceEnrollmentDrawerProps> = ({
-  isOpen,
-  onClose,
-}) => {
-  const { showBackendNotConnected } = useToast();
-  const [showDroidCamInfo, setShowDroidCamInfo] = useState(false);
-  const [selectedStudent, setSelectedStudent] = useState('');
+const qualityMessages: Record<string, string> = {
+  FACE_NOT_DETECTED: 'Wajah belum terdeteksi.',
+  MULTIPLE_FACES: 'Pastikan hanya satu orang di depan kamera.',
+  FACE_TOO_BLURRY: 'Gambar terlalu buram. Tahan posisi dan coba lagi.',
+  FACE_TOO_DARK: 'Pencahayaan terlalu gelap.',
+  FACE_TOO_BRIGHT: 'Pencahayaan terlalu terang.',
+  FACE_TOO_SMALL: 'Dekatkan wajah ke kamera.',
+  FACE_OUT_OF_FRAME: 'Posisikan seluruh wajah di dalam frame.',
+  SAMPLE_IDENTITY_MISMATCH: 'Sampel wajah tidak konsisten dengan sampel sebelumnya.',
+};
 
-  const handleSaveFace = () => {
-    showBackendNotConnected('Backend belum terhubung. Data biometrik wajah belum dapat disimpan.');
+export const FaceEnrollmentDrawer: React.FC<FaceEnrollmentDrawerProps> = ({ isOpen, onClose, students, selectedStudent, onCompleted }) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [studentId, setStudentId] = useState(selectedStudent?.id || '');
+  const [sampleCount, setSampleCount] = useState(0);
+  const [minimumSamples, setMinimumSamples] = useState(3);
+  const [cameraError, setCameraError] = useState('');
+  const [feedback, setFeedback] = useState('');
+  const [isCapturing, setIsCapturing] = useState(false);
+  const [isCompleting, setIsCompleting] = useState(false);
+  const student = students.find((item) => item.id === studentId) || selectedStudent;
+
+  const stopCamera = () => {
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
   };
 
-  return (
-    <>
-      <Drawer
-        isOpen={isOpen}
-        onClose={onClose}
-        title="Pendaftaran Biometrik Wajah"
-        subtitle="Daftarkan pola wajah siswa untuk sistem absensi otomatis"
-        width="lg"
-      >
-        <div className="space-y-6">
-          {/* Step 1: Select Student */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
-              1. Pilih Siswa
-            </label>
-            <select
-              value={selectedStudent}
-              onChange={(e) => setSelectedStudent(e.target.value)}
-              className="w-full px-3.5 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-            >
-              <option value="">-- Pilih Siswa (Daftar Kosong) --</option>
-            </select>
-            <p className="text-[11px] text-slate-500 mt-1">
-              Data siswa akan dimuat otomatis saat terhubung ke basis data lokal.
-            </p>
+  useEffect(() => {
+    setStudentId(selectedStudent?.id || '');
+    setSampleCount(0);
+    setFeedback('');
+  }, [selectedStudent, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen || !studentId) return;
+    void faceEnrollmentService.discardSamples(studentId).catch(() => undefined);
+  }, [isOpen, studentId]);
+
+  useEffect(() => {
+    if (!isOpen) { stopCamera(); return; }
+    if (!navigator.mediaDevices?.getUserMedia) { setCameraError('Browser ini tidak mendukung akses kamera.'); return; }
+    let cancelled = false;
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false }).then((stream) => {
+      if (cancelled) { stream.getTracks().forEach((track) => track.stop()); return; }
+      streamRef.current = stream;
+      if (videoRef.current) { videoRef.current.srcObject = stream; void videoRef.current.play(); }
+    }).catch(() => setCameraError('Kamera tidak tersedia atau izin kamera ditolak.'));
+    return () => { cancelled = true; stopCamera(); };
+  }, [isOpen]);
+
+  const handleCapture = () => {
+    if (!student || !videoRef.current || !canvasRef.current || isCapturing) return;
+    setIsCapturing(true); setFeedback('Memvalidasi sampel di backend...');
+    const video = videoRef.current; const canvas = canvasRef.current;
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+    canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
+    canvas.toBlob(async (blob) => {
+      if (!blob) { setFeedback('Frame kamera tidak dapat diproses.'); setIsCapturing(false); return; }
+      try {
+        const result = await faceEnrollmentService.addSample(student.id, blob);
+        setSampleCount(result.sampleCount); setMinimumSamples(result.minimumSamples); setFeedback(`Sampel ${result.sampleCount} valid.`);
+      } catch (error) {
+        const code = faceEnrollmentService.getErrorCode(error);
+        setFeedback(qualityMessages[code || ''] || (error instanceof Error ? error.message : 'Sampel tidak valid.'));
+      } finally { setIsCapturing(false); }
+    }, 'image/jpeg', 0.92);
+  };
+
+  const handleComplete = async () => {
+    if (!student || sampleCount < minimumSamples || isCompleting) return;
+    setIsCompleting(true);
+    try { await faceEnrollmentService.complete(student.id); setFeedback('Enrollment wajah berhasil disimpan.'); await onCompleted(); setTimeout(onClose, 700); }
+    catch (error) { setFeedback(error instanceof Error ? error.message : 'Enrollment belum dapat diselesaikan.'); }
+    finally { setIsCompleting(false); }
+  };
+
+  const handleClose = async () => {
+    if (student && sampleCount > 0) {
+      try { await faceEnrollmentService.discardSamples(student.id); } catch { }
+    }
+    onClose();
+  };
+
+  return <Drawer isOpen={isOpen} onClose={handleClose} title="Pendaftaran Wajah" subtitle="Ambil tiga sampel wajah yang jelas untuk identitas siswa." width="2xl">
+    <div className="space-y-5">
+      {!selectedStudent && <div><label className="block text-xs font-semibold text-slate-700 mb-1.5">Pilih siswa</label><select value={studentId} onChange={(event) => { setStudentId(event.target.value); setSampleCount(0); setFeedback(''); }} className="w-full px-3 py-2.5 text-sm border border-slate-300 rounded-lg"><option value="">Pilih siswa</option>{students.map((item) => <option key={item.id} value={item.id}>{item.fullName} · {item.nis} · {item.className}</option>)}</select></div>}
+      <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Identitas Siswa</p>{student ? <><h3 className="text-lg font-semibold text-slate-900 mt-1 break-words">{student.fullName}</h3><p className="text-sm text-slate-500 mt-0.5">{student.nis} · {student.className}</p></> : <p className="text-sm text-slate-500 mt-1">Pilih siswa untuk memulai.</p>}</div>
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
+        <div className="lg:col-span-3 space-y-3">
+          <div className="relative aspect-video rounded-xl bg-slate-950 overflow-hidden border border-slate-800">
+            <video ref={videoRef} muted playsInline className="w-full h-full object-cover" />
+            <div className="absolute inset-[12%] border-2 border-white/60 rounded-[42%] pointer-events-none" />
+            <div className="absolute left-3 top-3 px-2.5 py-1 rounded-md bg-slate-950/80 text-xs font-semibold text-white">LIVE CAMERA</div>
+            {cameraError && <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-center p-6"><CameraOff className="w-9 h-9 text-slate-400 mb-3" /><p className="text-sm text-white font-semibold">Kamera tidak tersedia</p><p className="text-xs text-slate-400 mt-1">{cameraError}</p></div>}
           </div>
-
-          {/* Step 2: Camera Stream Area */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="block text-xs font-semibold text-slate-700 uppercase">
-                2. Pratinjau Kamera (DroidCam)
-              </label>
-              <span className="text-[11px] font-medium text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
-                Kamera Belum Terhubung
-              </span>
-            </div>
-
-            {/* Camera Frame Placeholder */}
-            <div className="relative aspect-video w-full rounded-xl bg-slate-900 border border-slate-800 flex flex-col items-center justify-center p-6 text-center text-slate-400 overflow-hidden">
-              {/* Target Scan Guides */}
-              <div className="absolute inset-8 border border-white/10 rounded-lg pointer-events-none flex flex-col justify-between p-2">
-                <div className="flex justify-between">
-                  <div className="w-4 h-4 border-t-2 border-l-2 border-slate-500"></div>
-                  <div className="w-4 h-4 border-t-2 border-r-2 border-slate-500"></div>
-                </div>
-                <div className="flex justify-between">
-                  <div className="w-4 h-4 border-b-2 border-l-2 border-slate-500"></div>
-                  <div className="w-4 h-4 border-b-2 border-r-2 border-slate-500"></div>
-                </div>
-              </div>
-
-              <div className="w-12 h-12 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400 mb-3">
-                <CameraOff className="w-6 h-6" />
-              </div>
-              <h4 className="text-sm font-semibold text-slate-200 mb-1">Kamera belum terhubung.</h4>
-              <p className="text-xs text-slate-400 max-w-xs leading-relaxed mb-4">
-                Sistem disiapkan untuk menggunakan DroidCam sebagai kamera nirkabel melalui FastAPI lokal.
-              </p>
-
-              <button
-                type="button"
-                onClick={() => setShowDroidCamInfo(true)}
-                className="inline-flex items-center gap-2 px-3.5 py-1.5 text-xs font-medium text-slate-200 bg-slate-800 border border-slate-700 rounded-lg hover:bg-slate-700 transition-colors"
-              >
-                <Video className="w-3.5 h-3.5" />
-                Hubungkan Kamera
-              </button>
-            </div>
-          </div>
-
-          {/* Face Guidelines Box */}
-          <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-            <h5 className="text-xs font-semibold text-slate-800 mb-2 flex items-center gap-1.5">
-              <ShieldCheck className="w-4 h-4 text-slate-600" />
-              Standar Pendaftaran Biometrik Wajah:
-            </h5>
-            <ul className="text-xs text-slate-600 space-y-1.5 pl-1">
-              <li className="flex items-start gap-2">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                <span>Satu wajah di dalam frame (posisi tegak menghadap kamera).</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                <span>Pencahayaan cukup dan hindari backlight silau.</span>
-              </li>
-              <li className="flex items-start gap-2">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                <span>Ambil beberapa sudut wajah (lurus, sedikit ke kiri, sedikit ke kanan).</span>
-              </li>
-            </ul>
-          </div>
-
-          {/* Action Buttons */}
-          <div className="pt-4 border-t border-slate-200 flex items-center justify-between gap-3">
-            <button
-              type="button"
-              disabled={true}
-              className="inline-flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-medium text-slate-400 bg-slate-100 border border-slate-200 rounded-lg cursor-not-allowed"
-              title="Kamera belum aktif"
-            >
-              <Camera className="w-4 h-4" />
-              Ambil Foto (0/3)
-            </button>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2.5 text-xs sm:text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors border border-slate-200"
-              >
-                Tutup
-              </button>
-              <button
-                type="button"
-                onClick={handleSaveFace}
-                className="px-4 py-2.5 text-xs sm:text-sm font-medium text-white bg-[#2563EB] hover:bg-[#1D4ED8] rounded-lg shadow-xs transition-colors"
-              >
-                Simpan Data Wajah
-              </button>
-            </div>
-          </div>
+          <canvas ref={canvasRef} className="hidden" />
+          {feedback && <div aria-live="polite" className={`p-3 rounded-lg border text-sm flex gap-2 ${feedback.includes('berhasil') || feedback.includes('valid') ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}><AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />{feedback}</div>}
         </div>
-      </Drawer>
-
-      {/* DroidCam Integration Info Modal */}
-      <Modal
-        isOpen={showDroidCamInfo}
-        onClose={() => setShowDroidCamInfo(false)}
-        title="Integrasi Sumber Kamera DroidCam"
-        subtitle="Panduan koneksi DroidCam dengan server lokal FastAPI"
-        maxWidth="md"
-      >
-        <div className="space-y-3 text-xs sm:text-sm text-slate-600 leading-relaxed">
-          <p>
-            Tandara dirancang untuk menggunakan perangkat smartphone sebagai kamera presensi melalui aplikasi <strong>DroidCam</strong> (koneksi RTSP / MJPEG IP Webcam) yang diproses langsung oleh modul pengenalan wajah ONNX di server FastAPI lokal.
-          </p>
-
-          <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-900 text-xs space-y-1">
-            <p className="font-semibold flex items-center gap-1.5">
-              <Info className="w-4 h-4 text-blue-600" />
-              Langkah saat FastAPI aktif:
-            </p>
-            <ol className="list-decimal pl-4 space-y-1 text-blue-800">
-              <li>Pasang DroidCam pada ponsel dan hubungkan ke Wi-Fi sekolah yang sama.</li>
-              <li>Buka menu <strong>Perangkat & Sistem</strong> di Admin IT.</li>
-              <li>Masukkan IP DroidCam (contoh: <code>http://192.168.1.50:4747/video</code>).</li>
-              <li>Server lokal akan menangkap frame stream untuk enrollment & presensi.</li>
-            </ol>
+        <aside className="lg:col-span-2 lg:border-l lg:border-slate-200 lg:pl-6 flex flex-col justify-between gap-5">
+          <div className="space-y-5">
+            <div><div className="flex items-center justify-between"><p className="text-sm font-semibold text-slate-800">Sampel wajah</p><ShieldCheck className={`w-5 h-5 ${sampleCount >= minimumSamples ? 'text-emerald-600' : 'text-slate-400'}`} /></div><div className="grid grid-cols-3 gap-2 mt-3">{Array.from({ length: minimumSamples }, (_, index) => <div key={index} className={`h-2 rounded-sm ${index < sampleCount ? 'bg-emerald-500' : 'bg-slate-200'}`} />)}</div><p className="text-sm font-medium text-slate-800 mt-3">{sampleCount}/{minimumSamples} sampel valid</p></div>
+            <div className="text-xs text-slate-600 space-y-2"><p className="flex gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />Pastikan hanya satu wajah terlihat.</p><p>Gunakan pencahayaan merata dan pandang kamera.</p><p>Ubah posisi sedikit pada setiap sampel.</p></div>
           </div>
-
-          <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-xs flex items-start gap-2">
-            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-            <span>
-              Pada fase prototype ini, web browser tidak mengakses webcam lokal fisik untuk menjamin integritas batas arsitektur.
-            </span>
-          </div>
-
-          <div className="pt-2 text-right">
-            <button
-              type="button"
-              onClick={() => setShowDroidCamInfo(false)}
-              className="px-4 py-2 bg-[#2563EB] text-white rounded-lg text-xs font-semibold hover:bg-[#1D4ED8] transition-colors"
-            >
-              Tutup Informasi
-            </button>
-          </div>
-        </div>
-      </Modal>
-    </>
-  );
+          <div className="space-y-2"><button type="button" onClick={handleCapture} disabled={!student || Boolean(cameraError) || isCapturing} className="t-button-primary w-full"><Camera className="w-4 h-4" />{isCapturing ? 'Memvalidasi…' : 'Ambil Sampel'}</button><button type="button" onClick={handleComplete} disabled={!student || sampleCount < minimumSamples || isCompleting} className="w-full inline-flex items-center justify-center min-h-10 px-4 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white font-semibold disabled:opacity-40">{isCompleting ? 'Menyimpan…' : 'Selesaikan Enrollment'}</button><button type="button" onClick={handleClose} className="t-button-secondary w-full">Batal</button></div>
+        </aside>
+      </div>
+    </div>
+  </Drawer>;
 };

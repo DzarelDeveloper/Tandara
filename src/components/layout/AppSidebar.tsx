@@ -1,6 +1,6 @@
 /**
  * Tandara AppSidebar Component
- * Deep navy background (#0F1F3D) with role-specific menu items and collapsible behavior.
+ * Bright Tandara-blue navigation with persistent labels on desktop.
  */
 
 import React from 'react';
@@ -18,6 +18,7 @@ import {
   ShieldCheck,
   HelpCircle,
   LogOut,
+  X,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
@@ -25,7 +26,8 @@ import { useAuth } from '../../context/AuthContext';
 import { TandaraLogo } from '../ui/TandaraLogo';
 
 interface AppSidebarProps {
-  collapsed: boolean;
+  collapsed?: boolean;
+  mobile?: boolean;
   onToggleCollapse: () => void;
   onItemClick?: () => void;
   onOpenAuditModal?: () => void;
@@ -34,14 +36,15 @@ interface AppSidebarProps {
 }
 
 export const AppSidebar: React.FC<AppSidebarProps> = ({
-  collapsed,
+  collapsed = false,
+  mobile = false,
   onToggleCollapse,
   onItemClick,
   onOpenAuditModal,
   onOpenHelpModal,
   onConfirmLogout,
 }) => {
-  const { isAdmin } = useAuth();
+  const { isAdmin, session } = useAuth();
 
   const adminNav = [
     { label: 'Dashboard', path: '/admin/dashboard', icon: LayoutDashboard },
@@ -54,57 +57,57 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
   const teacherNav = [
     { label: 'Dashboard', path: '/teacher/dashboard', icon: LayoutDashboard },
     { label: 'Absensi Langsung', path: '/teacher/live-attendance', icon: Video },
-    { label: 'Kehadiran Siswa', path: '/teacher/attendance', icon: ClipboardCheck },
-    { label: 'Pengajuan Izin', path: '/teacher/leave-requests', icon: FileClock },
-    { label: 'Laporan & Koreksi', path: '/teacher/reports-corrections', icon: FileText },
+    { label: 'Riwayat Absensi', path: '/teacher/attendance', icon: ClipboardCheck },
+    { label: 'Izin Siswa', path: '/teacher/leave-requests', icon: FileClock },
+    { label: 'Laporan', path: '/teacher/reports-corrections', icon: FileText },
   ];
+  const parentNav = [{ label: 'Dashboard', path: '/parent/dashboard', icon: LayoutDashboard }];
 
-  const navItems = isAdmin ? adminNav : teacherNav;
+  const isParent = session?.role === 'PARENT';
+  const navItems = isAdmin ? adminNav : isParent ? parentNav : teacherNav;
+  const compact = collapsed && !mobile;
+  const toggleLabel = mobile ? 'Tutup sidebar' : compact ? 'Buka sidebar' : 'Tutup sidebar';
 
   return (
     <aside
-      className={`fixed inset-y-0 left-0 z-40 bg-[#0F1F3D] text-slate-300 transition-all duration-200 flex flex-col justify-between border-r border-[#1a2d52] ${
-        collapsed ? 'w-20' : 'w-64'
-      }`}
+      className={`fixed inset-y-0 left-0 z-40 bg-[#2463EB] text-white flex flex-col justify-between transition-[width] duration-200 ${collapsed && !mobile ? 'w-[72px]' : 'w-56'}`}
     >
       {/* Top Header & Logo */}
       <div>
-        <div className="h-16 px-4 flex items-center justify-between border-b border-[#1a2d52]">
+        <div className={`relative h-16 flex border-b border-white/15 ${compact ? 'items-center justify-center px-2' : 'items-center justify-between px-4'}`}>
           <TandaraLogo
-            size={collapsed ? 'sm' : 'md'}
-            showText={!collapsed}
+            size={compact ? 'sm' : 'md'}
+            showText={!compact}
             light={true}
           />
           <button
             type="button"
             onClick={onToggleCollapse}
-            aria-label={collapsed ? 'Perluas bilah navigasi' : 'Ciutkan bilah navigasi'}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800/80 transition-colors"
+            autoFocus={mobile}
+            aria-expanded={mobile ? true : !collapsed}
+            aria-label={toggleLabel}
+            title={toggleLabel}
+            className={`${compact ? 'absolute -right-3.5 top-1/2 h-7 w-7 -translate-y-1/2 rounded-full border border-white/80 bg-[#2463EB] text-white shadow-sm hover:bg-[#1D4ED8]' : 'h-8 w-8 rounded-lg text-blue-100 hover:bg-white/10 hover:text-white'} inline-flex shrink-0 items-center justify-center transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-[#2463EB]`}
           >
-            {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+            {mobile ? <X className="w-5 h-5" aria-hidden="true" /> : compact ? <ChevronRight className="w-5 h-5" strokeWidth={2.5} aria-hidden="true" /> : <ChevronLeft className="w-5 h-5" strokeWidth={2.5} aria-hidden="true" />}
           </button>
         </div>
 
         {/* Role Badge */}
-        {!collapsed && (
-          <div className="px-5 py-3 bg-[#0a162d]/70 border-b border-[#152542] flex items-center justify-between">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+          {!collapsed || mobile ? <div className="px-4 py-3 border-b border-white/15 flex items-center justify-between">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-100">
               Peran Aktif
             </span>
             <span
-              className={`text-xs px-2.5 py-0.5 rounded-md font-medium ${
-                isAdmin
-                  ? 'bg-blue-950 text-blue-300 border border-blue-800'
-                  : 'bg-teal-950 text-teal-300 border border-teal-800'
-              }`}
+              className="text-xs px-2.5 py-1 rounded-md font-semibold bg-white/15 text-white"
             >
-              {isAdmin ? 'Admin IT' : 'Guru / Piket'}
+              {isAdmin ? 'Admin IT' : isParent ? 'Orang Tua' : 'Guru / Piket'}
             </span>
-          </div>
-        )}
+          </div> : null}
 
         {/* Navigation Items */}
-        <nav aria-label="Navigasi Utama" className="p-3 space-y-1">
+        {!compact ? <p className="px-4 pt-4 pb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-blue-100">Main</p> : <div className="h-4" />}
+        <nav aria-label="Navigasi Utama" className="px-2.5 space-y-1">
           {navItems.map((item) => {
             const Icon = item.icon;
             return (
@@ -112,17 +115,18 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
                 key={item.path}
                 to={item.path}
                 onClick={onItemClick}
-                title={collapsed ? item.label : undefined}
+                title={compact ? item.label : undefined}
+                aria-label={compact ? item.label : undefined}
                 className={({ isActive }) =>
-                  `flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  `flex items-center gap-3 min-h-10 rounded-lg text-sm font-semibold transition-colors ${compact ? 'justify-center px-2' : 'px-3 py-2.5'} ${
                     isActive
-                      ? 'bg-[#2563EB] text-white'
-                      : 'text-slate-300 hover:bg-[#1a2d52] hover:text-white'
-                  } ${collapsed ? 'justify-center px-0' : ''}`
+                      ? 'bg-white text-[#1D4ED8]'
+                      : 'text-blue-50 hover:bg-white/12 hover:text-white'
+                  }`
                 }
               >
                 <Icon className="w-5 h-5 shrink-0" />
-                {!collapsed && <span className="truncate">{item.label}</span>}
+                {!compact && <span className="truncate whitespace-nowrap overflow-hidden">{item.label}</span>}
               </NavLink>
             );
           })}
@@ -130,43 +134,41 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       </div>
 
       {/* Bottom Actions */}
-      <div className="p-3 border-t border-[#1a2d52] space-y-1">
+      <div className="p-2.5 border-t border-white/15 space-y-1">
+        {!compact && <p className="px-3 pb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-blue-100">{isAdmin ? 'System' : 'Account'}</p>}
         {isAdmin ? (
           <button
             type="button"
             onClick={onOpenAuditModal}
-            title={collapsed ? 'Audit Log' : undefined}
-            className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-lg text-xs font-medium text-slate-300 hover:bg-[#1a2d52] hover:text-white transition-colors ${
-              collapsed ? 'justify-center px-0' : ''
-            }`}
+            title={compact ? 'Audit Log' : undefined}
+            aria-label="Audit Log"
+            className={`w-full min-h-10 flex items-center gap-3 rounded-lg text-sm font-medium text-blue-50 hover:bg-white/10 hover:text-white transition-colors ${compact ? 'justify-center px-2' : 'px-3 py-2.5'}`}
           >
-            <ShieldCheck className="w-4 h-4 text-teal-400 shrink-0" />
-            {!collapsed && <span>Audit Log</span>}
+            <ShieldCheck className="w-4 h-4 shrink-0" />
+            {!compact && <span className="whitespace-nowrap">Audit Log</span>}
           </button>
         ) : (
           <button
             type="button"
             onClick={onOpenHelpModal}
-            title={collapsed ? 'Bantuan' : undefined}
-            className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-lg text-xs font-medium text-slate-300 hover:bg-[#1a2d52] hover:text-white transition-colors ${
-              collapsed ? 'justify-center px-0' : ''
-            }`}
+            title={compact ? 'Bantuan' : undefined}
+            aria-label="Bantuan"
+            className={`w-full min-h-10 flex items-center gap-3 rounded-lg text-sm font-medium text-blue-50 hover:bg-white/10 hover:text-white transition-colors ${compact ? 'justify-center px-2' : 'px-3 py-2.5'}`}
           >
-            <HelpCircle className="w-4 h-4 text-teal-400 shrink-0" />
-            {!collapsed && <span>Bantuan</span>}
+            <HelpCircle className="w-4 h-4 shrink-0" />
+            {!compact && <span className="whitespace-nowrap">Bantuan</span>}
           </button>
         )}
 
         <button
           type="button"
           onClick={onConfirmLogout}
-          title={collapsed ? 'Keluar' : undefined}
-          className={`w-full flex items-center gap-3 px-3.5 py-2 rounded-lg text-xs font-medium text-red-400 hover:bg-red-950/40 hover:text-red-300 transition-colors ${
-            collapsed ? 'justify-center px-0' : ''
-          }`}
+          title={compact ? 'Keluar' : undefined}
+          aria-label="Keluar"
+          className={`w-full min-h-10 flex items-center gap-3 rounded-lg text-sm font-medium text-white hover:bg-white/10 transition-colors ${compact ? 'justify-center px-2' : 'px-3 py-2.5'}`}
         >
           <LogOut className="w-4 h-4 shrink-0" />
-          {!collapsed && <span>Keluar</span>}
+          {!compact && <span className="whitespace-nowrap">Keluar</span>}
         </button>
       </div>
     </aside>

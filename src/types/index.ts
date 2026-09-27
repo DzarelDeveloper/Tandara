@@ -3,7 +3,7 @@
  * Prepares the TypeScript interfaces and enums for future FastAPI backend integration.
  */
 
-export type Role = 'ADMIN_IT' | 'TEACHER' | 'GURU_PIKET';
+export type Role = 'ADMIN_IT' | 'TEACHER' | 'GURU_PIKET' | 'PARENT';
 
 export type AttendanceType = 'CHECK_IN' | 'CHECK_OUT';
 
@@ -63,9 +63,10 @@ export interface Parent {
   id: string;
   fullName: string;
   phone: string;
-  relationship: 'Ayah' | 'Ibu' | 'Wali';
+  relationship: string;
   connectedStudentIds: string[];
   connectedStudentNames: string[];
+  connectedStudents: Array<{ id: string; nis: string; fullName: string; className: string; isActive: boolean; relationship: string }>;
   username: string;
   accountStatus: 'ACTIVE' | 'PENDING_ACTIVATION' | 'INACTIVE';
   notificationsActive: boolean;
@@ -76,14 +77,26 @@ export interface Parent {
 export interface Class {
   id: string;
   name: string;
-  grade: '10' | '11' | '12';
+  grade: string;
   major: string;
+  majorId?: string | null;
+  schoolYear: string;
+  isActive: boolean;
   homeroomTeacher: string;
   studentCount: number;
   checkInTime: string;
   lateToleranceTime: string;
   checkOutTime: string;
   activeDays: string[];
+}
+
+export interface Major {
+  id: string;
+  name: string;
+  isActive: boolean;
+  classCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AttendanceEvent {
@@ -95,7 +108,7 @@ export interface AttendanceEvent {
   eventType: AttendanceType;
   timestamp: string;
   cameraSource: string;
-  confidenceScore?: number;
+  similarityScore?: number;
   notificationJobId?: string;
   notificationStatus?: NotificationStatus;
 }

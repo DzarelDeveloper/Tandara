@@ -3,13 +3,84 @@
 @layer base {
   :root {
     --font-inter: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+    --tandara-primary: #2563EB;
+    --tandara-primary-hover: #1D4ED8;
+    --tandara-navy: #102A56;
+    --tandara-workspace: #F7F9FC;
+    --tandara-surface: #FFFFFF;
+    --tandara-text: #172033;
+    --tandara-muted: #64748B;
+    --tandara-border: #E2E8F0;
+    --tandara-success: #15803D;
+    --tandara-warning: #B45309;
+    --tandara-danger: #B91C1C;
+    --radius-control: 9px;
+    --radius-card: 12px;
   }
 
   body {
     font-family: var(--font-inter);
-    background-color: #F6F7F9;
-    color: #111827;
+    background-color: var(--tandara-workspace);
+    color: var(--tandara-text);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
   }
+
+  :focus-visible {
+    outline: 2px solid var(--tandara-primary);
+    outline-offset: 2px;
+  }
+
+  button, input, select, textarea {
+    font: inherit;
+  }
+
+  button:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
+@layer components {
+  .t-card {
+    background: var(--tandara-surface);
+    border: 1px solid var(--tandara-border);
+    border-radius: var(--radius-card);
+  }
+
+  .t-button-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-height: 2.5rem;
+    padding: 0.5rem 1rem;
+    border-radius: var(--radius-control);
+    background: var(--tandara-primary);
+    color: white;
+    font-weight: 600;
+  }
+
+  .t-button-primary:hover { background: var(--tandara-primary-hover); }
+  .t-button-primary:disabled { opacity: .45; cursor: not-allowed; }
+
+  .t-button-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-height: 2.5rem;
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--tandara-border);
+    border-radius: var(--radius-control);
+    background: white;
+    color: var(--tandara-text);
+    font-weight: 600;
+  }
+
+  .t-button-secondary:hover { background: #F8FAFC; }
+  .t-field { border: 1px solid var(--tandara-border); border-radius: var(--radius-control); background: white; }
 }
 
 /* Custom scrollbar for desktop dashboards */

@@ -24,7 +24,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   hasActiveFilters = false,
 }) => {
   return (
-    <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs mb-4 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
+    <div className="bg-white p-3.5 rounded-xl border border-slate-200 mb-4 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
       {/* Search Input */}
       <div className="relative flex-1 max-w-md">
         <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />

@@ -16,9 +16,9 @@ interface StartSessionModalProps {
 }
 
 export const StartSessionModal: React.FC<StartSessionModalProps> = ({ isOpen, onClose, onStarted }) => {
-  const { showBackendNotConnected } = useToast();
+  const { showToast } = useToast();
   const [mode, setMode] = useState<'CHECK_IN' | 'CHECK_OUT'>('CHECK_IN');
-  const [cameraSource, setCameraSource] = useState('droidcam_gate_1');
+  const cameraSource = 'BROWSER_CAMERA';
   const [classFilter, setClassFilter] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -27,10 +27,10 @@ export const StartSessionModal: React.FC<StartSessionModalProps> = ({ isOpen, on
     setIsSubmitting(true);
     try {
       const session = await attendanceService.startLiveSession({ mode, cameraSource, classFilter });
-      onStarted?.(session.sessionId, mode, cameraSource);
+      onStarted?.(session.sessionId, session.mode, cameraSource);
       onClose();
     } catch (error) {
-      showBackendNotConnected(error instanceof Error ? error.message : 'Sesi belum dapat dimulai.');
+      showToast({ type: 'error', message: error instanceof Error ? error.message : 'Sesi belum dapat dimulai.' });
     } finally { setIsSubmitting(false); }
   };
 
@@ -39,7 +39,7 @@ export const StartSessionModal: React.FC<StartSessionModalProps> = ({ isOpen, on
       isOpen={isOpen}
       onClose={onClose}
       title="Mulai Sesi Absensi Wajah"
-      subtitle="Pilih mode kehadiran dan hubungkan dengan sumber kamera DroidCam"
+      subtitle="Pilih mode kehadiran untuk kamera browser atau virtual webcam"
       maxWidth="md"
     >
       <form onSubmit={handleSubmit} className="space-y-4">
@@ -86,18 +86,14 @@ export const StartSessionModal: React.FC<StartSessionModalProps> = ({ isOpen, on
         {/* Camera Source */}
         <div>
           <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-            Sumber Kamera (DroidCam)
+            Sumber Kamera
           </label>
           <div className="relative">
-            <select
-              value={cameraSource}
-              onChange={(e) => setCameraSource(e.target.value)}
+            <div
               className="w-full pl-9 pr-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
             >
-              <option value="droidcam_gate_1">Kamera Gerbang Masuk (DroidCam RTSP 1)</option>
-              <option value="droidcam_gate_2">Kamera Gerbang Keluar (DroidCam RTSP 2)</option>
-              <option value="droidcam_lobby">Kamera Lobby Utama (DroidCam RTSP 3)</option>
-            </select>
+              Browser camera / virtual webcam
+            </div>
             <Camera className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           </div>
         </div>
@@ -122,9 +118,9 @@ export const StartSessionModal: React.FC<StartSessionModalProps> = ({ isOpen, on
           </p>
         </div>
 
-        {/* Notification Target Reminder */}
+        {/* Runtime behaviour */}
         <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600">
-          Notifikasi berhasil scan akan otomatis dikirimkan ke <strong>aplikasi orang tua</strong> secara instan.
+          Kamera akan memindai frame secara berkala setelah sesi aktif. Pilih webcam atau DroidCam virtual pada halaman absensi.
         </div>
 
         {/* Action Buttons */}

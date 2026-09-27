@@ -5,8 +5,7 @@
  * GET    /api/leave-requests
   const requests = await apiRequest<LeaveRequest[]>('/api/leave-requests');
   body: JSON.stringify({ notes }),
- * POST   /api/v1/leave-requests/:id/approve
- * POST   /api/v1/leave-requests/:id/reject
+ * Approve/reject operations use the current FastAPI contract.
  */
 
 import { LeaveRequest, LeaveStatus } from '../types';

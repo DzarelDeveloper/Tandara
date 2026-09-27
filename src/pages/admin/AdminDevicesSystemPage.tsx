@@ -1,356 +1,180 @@
-/**
- * Tandara Admin IT - Perangkat & Sistem Page
- * Route: /admin/devices-system
- */
-
-import React, { useState } from 'react';
-import {
-  Camera,
-  Server,
-  Database,
-  RefreshCw,
-  Sliders,
-  Send,
-  Save,
-  Download,
-  Shield,
-  Activity,
-} from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Activity, Camera, CheckCircle2, Database, RefreshCw, Server, ShieldAlert, StopCircle, Video } from 'lucide-react';
 import { PageHeader } from '../../components/ui/PageHeader';
-import { EmptyState } from '../../components/ui/EmptyState';
-import { BackendDisconnected } from '../../components/ui/BackendDisconnected';
-import { useToast } from '../../context/ToastContext';
+import { ApiError } from '../../services/api';
+import { ActiveSessionHealth, DetectionDiagnostic, FaceEngineHealth, HealthStatus, systemService } from '../../services/system.service';
+import { CAMERA_STORAGE_KEY, CameraPermissionState, cameraConstraints, cameraErrorMessage, cameraErrorState, enumerateVideoDevices, stopMediaStream } from '../../utils/camera';
+
+type ServiceState = 'CHECKING' | 'ONLINE' | 'OFFLINE';
+type TrackDetails = { label: string; width?: number; height?: number; frameRate?: number };
+
+const Badge = ({ ok, text }: { ok: boolean; text: string }) => <span className={`inline-flex items-center gap-1.5 text-xs font-semibold ${ok ? 'text-emerald-700' : 'text-amber-700'}`}><span className={`w-2 h-2 rounded-full ${ok ? 'bg-emerald-500' : 'bg-amber-500'}`} />{text}</span>;
+
+function captureFrame(video: HTMLVideoElement): Promise<Blob | null> {
+  if (!video.videoWidth || !video.videoHeight) return Promise.resolve(null);
+  const canvas = document.createElement('canvas');
+  const scale = Math.min(1, 640 / video.videoWidth, 360 / video.videoHeight);
+  canvas.width = Math.max(1, Math.round(video.videoWidth * scale)); canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  const context = canvas.getContext('2d');
+  if (!context) return Promise.resolve(null);
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+}
+
+function withTimeout<T>(request: Promise<T>, timeoutMs = 10_000): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error('DIAGNOSTIC_TIMEOUT')), timeoutMs);
+    request.then((value) => { window.clearTimeout(timeout); resolve(value); }, (error) => { window.clearTimeout(timeout); reject(error); });
+  });
+}
 
 export const AdminDevicesSystemPage: React.FC = () => {
-  const { showBackendNotConnected } = useToast();
+  const [serviceState, setServiceState] = useState<ServiceState>('CHECKING');
+  const [health, setHealth] = useState<HealthStatus | null>(null);
+  const [face, setFace] = useState<FaceEngineHealth | null>(null);
+  const [session, setSession] = useState<ActiveSessionHealth | null>(null);
+  const [latency, setLatency] = useState<number | null>(null);
+  const [lastChecked, setLastChecked] = useState<Date | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState(() => localStorage.getItem(CAMERA_STORAGE_KEY) ?? '');
+  const [permission, setPermission] = useState<CameraPermissionState>('NOT_REQUESTED');
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [trackDetails, setTrackDetails] = useState<TrackDetails | null>(null);
+  const [diagnostic, setDiagnostic] = useState<DetectionDiagnostic | null>(null);
+  const [diagnosticError, setDiagnosticError] = useState('');
+  const [detecting, setDetecting] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const detectAbortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+  const refreshInFlightRef = useRef(false);
 
-  const [serverHost, setServerHost] = useState('http://localhost');
-  const [apiPort, setApiPort] = useState('8000');
-  const [webPort, setWebPort] = useState('3000');
+  const refreshDevices = useCallback(async () => {
+    try {
+      const available = await enumerateVideoDevices();
+      if (!mountedRef.current) return;
+      setDevices(available);
+      setSelectedDeviceId((current) => {
+        const next = available.some((device) => device.deviceId === current) ? current : (available[0]?.deviceId ?? '');
+        if (next) localStorage.setItem(CAMERA_STORAGE_KEY, next); else localStorage.removeItem(CAMERA_STORAGE_KEY);
+        return next;
+      });
+    } catch { if (mountedRef.current) setPermission('ERROR'); }
+  }, []);
 
-  const handleTestCamera = (name: string) => {
-    showBackendNotConnected(`Backend belum terhubung. Uji kamera ${name} memerlukan server aktif.`);
+  const stopCamera = useCallback(() => {
+    detectAbortRef.current?.abort(); detectAbortRef.current = null;
+    stopMediaStream(streamRef.current); streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
+    setStream(null); setTrackDetails(null); setDiagnostic(null); setDetecting(false);
+  }, []);
+
+  const startCamera = useCallback(async (deviceId = selectedDeviceId) => {
+    if (!navigator.mediaDevices?.getUserMedia) { setPermission('ERROR'); return; }
+    setPermission('REQUESTING'); setDiagnostic(null); setDiagnosticError('');
+    try {
+      const next = await navigator.mediaDevices.getUserMedia(cameraConstraints(deviceId || undefined));
+      if (!mountedRef.current) { stopMediaStream(next); return; }
+      stopMediaStream(streamRef.current); streamRef.current = next; setStream(next); setPermission('GRANTED');
+      const track = next.getVideoTracks()[0]; const settings = track?.getSettings(); const activeId = settings?.deviceId ?? deviceId;
+      if (activeId) { setSelectedDeviceId(activeId); localStorage.setItem(CAMERA_STORAGE_KEY, activeId); }
+      setTrackDetails({ label: track?.label || 'Kamera browser', width: settings?.width, height: settings?.height, frameRate: settings?.frameRate });
+      await refreshDevices();
+    } catch (error) { stopCamera(); setPermission(cameraErrorState(error)); }
+  }, [refreshDevices, selectedDeviceId, stopCamera]);
+
+  const refreshDiagnostics = useCallback(async () => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    setRefreshing(true); setServiceState('CHECKING');
+    const healthStarted = performance.now();
+    try {
+      const healthCheck = withTimeout(systemService.health()).then((value) => ({ value, latency: Math.round(performance.now() - healthStarted) }));
+      const [healthResult, faceResult, sessionResult, devicesResult] = await Promise.allSettled([
+        healthCheck,
+        withTimeout(systemService.faceEngine()),
+        withTimeout(systemService.activeSession()),
+        withTimeout(enumerateVideoDevices()),
+      ]);
+      if (!mountedRef.current) return;
+      if (healthResult.status === 'fulfilled') {
+        setHealth(healthResult.value.value);
+        setServiceState(healthResult.value.value.status === 'ok' ? 'ONLINE' : 'OFFLINE');
+        setLatency(healthResult.value.latency);
+      } else {
+        setHealth(null); setServiceState('OFFLINE'); setLatency(null);
+      }
+      setFace(faceResult.status === 'fulfilled' ? faceResult.value : null);
+      setSession(sessionResult.status === 'fulfilled' ? sessionResult.value : null);
+      if (devicesResult.status === 'fulfilled') {
+        const available = devicesResult.value;
+        setDevices(available);
+        setSelectedDeviceId((current) => {
+          const next = available.some((device) => device.deviceId === current) ? current : (available[0]?.deviceId ?? '');
+          if (next) localStorage.setItem(CAMERA_STORAGE_KEY, next); else localStorage.removeItem(CAMERA_STORAGE_KEY);
+          return next;
+        });
+      }
+    } finally {
+      refreshInFlightRef.current = false;
+      if (mountedRef.current) { setLastChecked(new Date()); setRefreshing(false); }
+    }
+  }, []);
+
+  useEffect(() => { void refreshDiagnostics(); }, [refreshDiagnostics]);
+  useEffect(() => { if (videoRef.current && stream) { videoRef.current.srcObject = stream; void videoRef.current.play(); } }, [stream]);
+  useEffect(() => {
+    const changed = async () => {
+      const available = await enumerateVideoDevices(); if (!mountedRef.current) return; setDevices(available);
+      if (selectedDeviceId && !available.some((device) => device.deviceId === selectedDeviceId)) {
+        stopCamera(); const fallback = available[0]?.deviceId ?? ''; setSelectedDeviceId(fallback); setPermission(fallback ? 'NOT_REQUESTED' : 'NO_DEVICE');
+      }
+    };
+    navigator.mediaDevices?.addEventListener?.('devicechange', changed);
+    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', changed);
+  }, [selectedDeviceId, stopCamera]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; detectAbortRef.current?.abort(); stopMediaStream(streamRef.current); };
+  }, []);
+
+  const switchDevice = async (deviceId: string) => { setSelectedDeviceId(deviceId); localStorage.setItem(CAMERA_STORAGE_KEY, deviceId); if (streamRef.current) { stopCamera(); await startCamera(deviceId); } };
+  const runDetection = async () => {
+    if (!videoRef.current) return; const image = await captureFrame(videoRef.current); if (!image) { setDiagnosticError('Frame kamera belum siap.'); return; }
+    const controller = new AbortController(); detectAbortRef.current = controller; setDetecting(true); setDiagnostic(null); setDiagnosticError('');
+    let timedOut = false;
+    const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, 10_000);
+    try { setDiagnostic(await systemService.detectFace(image, controller.signal)); }
+    catch (error) { if (timedOut) setDiagnosticError('Uji deteksi melewati batas waktu. Periksa koneksi backend.'); else if (!controller.signal.aborted) setDiagnosticError(error instanceof ApiError ? error.message : 'Uji deteksi gagal.'); }
+    finally { window.clearTimeout(timeout); if (detectAbortRef.current === controller) detectAbortRef.current = null; setDetecting(false); }
   };
 
-  const handleRestartDevice = (name: string) => {
-    showBackendNotConnected(`Backend belum terhubung. Mulai ulang ${name} belum dapat diproses.`);
-  };
+  const dbReady = health?.database.status === 'connected'; const faceReady = face?.status === 'READY' || health?.face_recognition === 'READY'; const cameraReady = Boolean(stream && trackDetails);
+  const systemReady = serviceState === 'ONLINE' && dbReady && faceReady && cameraReady;
+  const detectionMessage = diagnostic ? diagnostic.faceCount === 0 ? 'Wajah tidak terdeteksi.' : diagnostic.faceCount === 1 ? (diagnostic.quality === 'OK' ? '1 wajah terdeteksi.' : `1 wajah terdeteksi — ${diagnostic.quality}.`) : 'Lebih dari satu wajah terdeteksi.' : '';
 
-  const handleChangeSource = (name: string) => {
-    showBackendNotConnected(`Backend belum terhubung. Pengaturan sumber kamera ${name} membutuhkan server.`);
-  };
-
-  const handleSaveNetwork = (e: React.FormEvent) => {
-    e.preventDefault();
-    showBackendNotConnected('Backend belum terhubung. Konfigurasi jaringan lokal belum dapat disimpan.');
-  };
-
-  const handleRetryNotifications = () => {
-    showBackendNotConnected('Backend belum terhubung. Pengiriman ulang antrean notifikasi belum dapat diproses.');
-  };
-
-  const handleCreateBackup = () => {
-    showBackendNotConnected('Backend belum terhubung. Pencadangan basis data SQLite memerlukan server lokal.');
-  };
-
-  const devices = [
-    {
-      id: 'cam-in',
-      name: 'Kamera Gerbang Masuk',
-      type: 'DroidCam RTSP',
-      status: 'Belum terhubung',
-      icon: Camera,
-    },
-    {
-      id: 'cam-out',
-      name: 'Kamera Gerbang Keluar',
-      type: 'DroidCam RTSP',
-      status: 'Belum terhubung',
-      icon: Camera,
-    },
-    {
-      id: 'srv-local',
-      name: 'Server Lokal (FastAPI)',
-      type: 'Python 3.11 Runtime',
-      status: 'Belum terhubung',
-      icon: Server,
-    },
-    {
-      id: 'db-sqlite',
-      name: 'Database SQLite',
-      type: 'sqlite3 local.db',
-      status: 'Belum terhubung',
-      icon: Database,
-    },
-  ];
-
-  return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Perangkat & Sistem"
-        subtitle="Manajemen perangkat kamera pengenal wajah, koneksi FastAPI lokal, dan antrean aplikasi orang tua"
-        breadcrumbs={[
-          { label: 'Admin IT', href: '/admin/dashboard' },
-          { label: 'Perangkat & Sistem' },
-        ]}
-      />
-
-      <BackendDisconnected moduleName="Modul Perangkat & Sistem" />
-
-      {/* 4 Device Cards (All without fake CPU/RAM/FPS/DB size) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {devices.map((device) => {
-          const Icon = device.icon;
-          return (
-            <div
-              key={device.id}
-              className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex flex-col justify-between"
-            >
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <div className="w-9 h-9 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-600">
-                    <Icon className="w-4 h-4" />
-                  </div>
-                  <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-800 border border-amber-200">
-                    {device.status}
-                  </span>
-                </div>
-                <h4 className="text-sm font-semibold text-slate-900">{device.name}</h4>
-                <p className="text-xs text-slate-500 mt-0.5">{device.type}</p>
-              </div>
-
-              <div className="pt-3.5 border-t border-slate-100 mt-4 flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleTestCamera(device.name)}
-                  className="text-xs text-[#2563EB] hover:text-[#1D4ED8] font-medium"
-                >
-                  Uji Koneksi
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleRestartDevice(device.name)}
-                  className="text-xs text-slate-500 hover:text-slate-800"
-                >
-                  Restart
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Camera Live Preview & Control Container */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Monitoring Area (2 cols) */}
-        <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
-          <div className="flex items-center justify-between pb-3.5 border-b border-slate-100 mb-4">
-            <div>
-              <h3 className="text-base font-semibold text-slate-900">Pemantauan Stream Kamera</h3>
-              <p className="text-xs text-slate-500">Pratinjau umpan video IP DroidCam</p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => handleTestCamera('Gerbang Utama')}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors border border-slate-200"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                Tes Kamera
-              </button>
-              <button
-                type="button"
-                onClick={() => handleRestartDevice('Stream Kamera')}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors border border-slate-200"
-              >
-                Mulai Ulang
-              </button>
-              <button
-                type="button"
-                onClick={() => handleChangeSource('Kamera Utama')}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors border border-blue-200"
-              >
-                <Sliders className="w-3.5 h-3.5" />
-                Ubah Sumber
-              </button>
-            </div>
-          </div>
-
-          {/* Placeholder frame without real webcam */}
-          <div className="aspect-video w-full rounded-lg bg-slate-900 border border-slate-800 flex flex-col items-center justify-center p-6 text-center text-slate-400">
-            <div className="w-12 h-12 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400 mb-3">
-              <Camera className="w-6 h-6" />
-            </div>
-            <h4 className="text-sm font-semibold text-slate-200">Kamera belum terhubung</h4>
-            <p className="text-xs text-slate-400 max-w-sm mt-1 leading-relaxed">
-              Hubungkan DroidCam pada perangkat Android/iOS ke jaringan sekolah yang sama dan masukkan URL RTSP/HTTP di server lokal.
-            </p>
-          </div>
-        </div>
-
-        {/* Notification Queue Panel (1 col) */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-3.5 border-b border-slate-100 mb-4">
-              <div>
-                <h3 className="text-base font-semibold text-slate-900">Antrean Notifikasi</h3>
-                <p className="text-xs text-slate-500">Pengiriman ke aplikasi orang tua</p>
-              </div>
-              <Send className="w-4 h-4 text-slate-400" />
-            </div>
-
-            <div className="grid grid-cols-3 gap-2 p-3 bg-slate-50 rounded-lg border border-slate-200 text-center mb-4">
-              <div>
-                <p className="text-[10px] uppercase font-semibold text-slate-500">Terkirim</p>
-                <p className="text-xl font-bold text-slate-900 font-mono mt-0.5">—</p>
-              </div>
-              <div className="border-x border-slate-200">
-                <p className="text-[10px] uppercase font-semibold text-slate-500">Menunggu</p>
-                <p className="text-xl font-bold text-slate-900 font-mono mt-0.5">—</p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase font-semibold text-slate-500">Gagal</p>
-                <p className="text-xl font-bold text-slate-900 font-mono mt-0.5">—</p>
-              </div>
-            </div>
-
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Pemberitahuan presensi otomatis ditransmisikan ke aplikasi mobile orang tua Tandara secara asinkron.
-            </p>
-          </div>
-
-          <div className="pt-3.5 border-t border-slate-100 mt-4">
-            <button
-              type="button"
-              onClick={handleRetryNotifications}
-              className="w-full py-2 px-3 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center justify-center gap-1.5 border border-slate-200"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              Coba Kirim Ulang
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Local Network Configuration & Maintenance Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Local Network Configuration Form */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
-          <div className="pb-3 border-b border-slate-100 mb-4">
-            <h3 className="text-base font-semibold text-slate-900">Konfigurasi Jaringan Server Lokal</h3>
-            <p className="text-xs text-slate-500">
-              Pengaturan alamat host dan port koneksi backend FastAPI
-            </p>
-          </div>
-
-          <form onSubmit={handleSaveNetwork} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                Alamat Server Lokal
-              </label>
-              <input
-                type="text"
-                value={serverHost}
-                onChange={(e) => setServerHost(e.target.value)}
-                placeholder="http://localhost atau http://192.168.1.100"
-                className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-mono"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                  Port API (FastAPI)
-                </label>
-                <input
-                  type="number"
-                  value={apiPort}
-                  onChange={(e) => setApiPort(e.target.value)}
-                  className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                  Port Web App
-                </label>
-                <input
-                  type="number"
-                  value={webPort}
-                  onChange={(e) => setWebPort(e.target.value)}
-                  className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-mono"
-                />
-              </div>
-            </div>
-
-            <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-600">
-              <span className="font-semibold text-slate-800">Status Koneksi Saat Ini:</span> Belum aktif (menunggu layanan backend di port 8000).
-            </div>
-
-            <div className="pt-2 flex justify-end">
-              <button
-                type="submit"
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-semibold text-white bg-[#2563EB] hover:bg-[#1D4ED8] rounded-lg transition-colors shadow-xs"
-              >
-                <Save className="w-4 h-4" />
-                Simpan Konfigurasi Jaringan
-              </button>
-            </div>
-          </form>
-        </div>
-
-        {/* Backup and Maintenance Panel */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs flex flex-col justify-between">
-          <div>
-            <div className="pb-3 border-b border-slate-100 mb-4">
-              <h3 className="text-base font-semibold text-slate-900">Pemeliharaan & Pencadangan Basis Data</h3>
-              <p className="text-xs text-slate-500">Backup snapshot SQLite dan peremajaan sistem</p>
-            </div>
-
-            <div className="space-y-3 text-xs text-slate-600">
-              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
-                <span className="font-semibold text-slate-800 block mb-0.5">Snapshot SQLite Harian</span>
-                <p className="text-slate-500">
-                  Cadangkan data siswa, pendaftaran pola wajah biometrik, dan seluruh rekam jejak absensi ke file backup terenkripsi.
-                </p>
-              </div>
-
-              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200">
-                <span className="font-semibold text-slate-800 block mb-0.5">Log Diagnostik Sistem</span>
-                <p className="text-slate-500">
-                  Pemeriksaan jejak runtime OpenCV/ONNX dan latency pengenalan wajah.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="pt-3.5 border-t border-slate-100 mt-4 flex items-center justify-end gap-3">
-            <button
-              type="button"
-              onClick={handleCreateBackup}
-              className="inline-flex items-center gap-2 px-4 py-2 text-xs sm:text-sm font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors border border-slate-200"
-            >
-              <Download className="w-4 h-4 text-slate-500" />
-              Unduh Snapshot SQLite
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* System Log Empty State */}
-      <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
-        <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
-          <h3 className="text-base font-semibold text-slate-900">Log Aktivitas Layanan Sistem</h3>
-          <span className="text-xs text-slate-400 font-mono">systemd / uvicorn</span>
-        </div>
-
-        <EmptyState
-          icon={Activity}
-          title="Belum ada catatan log sistem."
-          description="Log runtime FastAPI, deteksi kamera RTSP DroidCam, dan pengiriman event absensi akan ditampilkan di sini."
-          className="py-8"
-        />
-      </div>
-    </div>
-  );
+  return <div className="space-y-6">
+    <PageHeader title="System Health & Camera Diagnostics" subtitle="Status nyata layanan dan kesiapan kamera browser Tandara" breadcrumbs={[{ label: 'Admin IT', href: '/admin/dashboard' }, { label: 'Perangkat & Sistem' }]} />
+    <section className={`rounded-xl border p-5 ${systemReady ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
+      <div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-semibold uppercase text-slate-500">System Readiness</p><h2 className="text-xl font-bold">{systemReady ? 'SYSTEM READY' : 'ACTION REQUIRED'}</h2><p className="text-xs text-slate-500 mt-1">Last checked: {lastChecked ? lastChecked.toLocaleTimeString('id-ID') : '—'}</p></div><button type="button" onClick={() => void refreshDiagnostics()} disabled={refreshing} className="inline-flex items-center gap-2 rounded-lg bg-white border border-slate-300 px-4 py-2 text-sm font-semibold disabled:opacity-60"><RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />Periksa Ulang</button></div>
+      <div className="flex flex-wrap gap-4 mt-4 text-sm"><span>{serviceState === 'ONLINE' ? '✓' : '✕'} Backend</span><span>{dbReady ? '✓' : '✕'} Database</span><span>{faceReady ? '✓' : '✕'} Face Engine</span><span>{cameraReady ? '✓' : '✕'} Camera</span></div>
+    </section>
+    <section><h3 className="font-semibold mb-3">System Services</h3><div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="bg-white border rounded-xl p-5"><Server className="w-5 h-5 text-blue-600 mb-3" /><p className="font-semibold">FastAPI</p><Badge ok={serviceState === 'ONLINE'} text={serviceState} /><p className="text-xs text-slate-500 mt-2">API latency: {latency === null ? '—' : `${latency} ms`}</p></div>
+      <div className="bg-white border rounded-xl p-5"><Database className="w-5 h-5 text-blue-600 mb-3" /><p className="font-semibold">Database</p><Badge ok={dbReady} text={health ? health.database.status.toUpperCase() : 'UNKNOWN'} /><p className="text-xs text-slate-500 mt-2">{health?.database.type === 'sqlite' ? 'SQLite' : health?.database.type ?? '—'}</p></div>
+      <div className="bg-white border rounded-xl p-5"><Activity className="w-5 h-5 text-blue-600 mb-3" /><p className="font-semibold">Face Engine</p><Badge ok={faceReady} text={face?.status ?? health?.face_recognition ?? 'UNAVAILABLE'} /><div className="text-xs text-slate-500 mt-2"><p>YuNet: {face?.detectorStatus ?? '—'}</p><p>SFace: {face?.recognizerStatus ?? '—'}</p><p>{face?.engine ?? 'OpenCV / ONNX'}</p>{face?.message && <p className="text-amber-700">{face.message}</p>}</div></div>
+    </div></section>
+    <section className="bg-white border rounded-xl p-5">
+      <div className="flex gap-2 mb-4"><Video className="w-5 h-5 text-blue-600" /><div><h3 className="font-semibold">Camera Diagnostics</h3><p className="text-xs text-slate-500">Preview lokal browser; frame hanya dikirim saat Uji Deteksi Wajah ditekan.</p></div></div>
+      <label className="block text-xs font-semibold mb-1">SUMBER KAMERA</label><select value={selectedDeviceId} onChange={(event) => void switchDevice(event.target.value)} className="w-full md:max-w-lg border rounded-lg px-3 py-2 text-sm" disabled={!devices.length}>{devices.length ? devices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>) : <option value="">Tidak ada kamera terdeteksi</option>}</select>
+      <p className="text-xs text-slate-500 mt-2">Jika menggunakan DroidCam, aktifkan virtual camera terlebih dahulu lalu pilih perangkatnya di sini.</p>
+      <div className="relative aspect-video max-w-3xl mt-4 rounded-xl overflow-hidden bg-slate-950 flex items-center justify-center">{stream ? <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-contain" /> : <div className="text-center text-slate-400 px-6"><Camera className="w-9 h-9 mx-auto mb-2" /><p className="text-sm">{cameraErrorMessage(permission)}</p></div>}{diagnostic?.faceBoxes.map((box, index) => <div key={index} className="absolute border-2 border-emerald-400" style={{ left: `${box.x * 100}%`, top: `${box.y * 100}%`, width: `${box.width * 100}%`, height: `${box.height * 100}%` }} />)}</div>
+      <div className="flex flex-wrap gap-2 mt-4">{stream ? <button type="button" onClick={stopCamera} className="inline-flex items-center gap-2 bg-slate-800 text-white rounded-lg px-4 py-2 text-sm"><StopCircle className="w-4 h-4" />Hentikan Kamera</button> : <button type="button" onClick={() => void startCamera()} disabled={permission === 'REQUESTING'} className="inline-flex items-center gap-2 bg-blue-600 text-white rounded-lg px-4 py-2 text-sm disabled:opacity-60"><Camera className="w-4 h-4" />{permission === 'NOT_REQUESTED' ? 'Izinkan Kamera' : 'Mulai Tes Kamera'}</button>}<button type="button" onClick={() => void runDetection()} disabled={!cameraReady || serviceState !== 'ONLINE' || !faceReady || detecting} className="inline-flex items-center gap-2 border rounded-lg px-4 py-2 text-sm disabled:opacity-50"><CheckCircle2 className="w-4 h-4" />{detecting ? 'Mendeteksi…' : 'Uji Deteksi Wajah'}</button></div>
+      {trackDetails && <div className="grid sm:grid-cols-3 gap-3 mt-4 text-sm"><p><span className="text-slate-500">Device:</span> {trackDetails.label}</p><p><span className="text-slate-500">Resolution:</span> {trackDetails.width && trackDetails.height ? `${trackDetails.width}×${trackDetails.height}` : 'Tidak tersedia'}</p><p><span className="text-slate-500">Frame Rate:</span> {trackDetails.frameRate ?? 'Tidak tersedia'}</p></div>}
+      {(detectionMessage || diagnosticError) && <p className={`mt-3 text-sm ${diagnosticError ? 'text-red-700' : ''}`}>{diagnosticError || detectionMessage}</p>}
+      <div className="mt-5"><p className="text-xs font-semibold mb-2">CAMERA DEVICES</p>{devices.length ? <ul className="text-sm space-y-1">{devices.map((device, index) => <li key={device.deviceId}>• {device.label || `Camera ${index + 1}`}</li>)}</ul> : <p className="text-sm text-slate-500">Label perangkat tersedia setelah browser memberikan izin kamera.</p>}</div>
+    </section>
+    <div className="grid md:grid-cols-2 gap-4"><section className="bg-white border rounded-xl p-5"><h3 className="font-semibold mb-3">Attendance Session</h3>{session ? <div><Badge ok text="ACTIVE" /><p className="text-sm mt-2">Mode: {session.mode}</p><p className="text-sm">Camera Source: {session.cameraSource}</p><p className="text-sm">Opened At: {new Date(session.openedAt).toLocaleString('id-ID')}</p></div> : <div><Badge ok={false} text="NO ACTIVE SESSION" /><p className="text-xs text-slate-500 mt-2">Sesi hanya dibuka dari alur attendance.</p></div>}</section><section className="bg-white border rounded-xl p-5"><div className="flex gap-2"><ShieldAlert className="w-5 h-5 text-amber-600" /><div><h3 className="font-semibold">Parent Notification</h3><p className="text-xs font-semibold text-amber-700 mt-2">IN DEVELOPMENT</p><p className="text-sm text-slate-600 mt-2">Pengiriman notifikasi presensi ke aplikasi orang tua sedang dalam tahap pengembangan.</p></div></div></section></div>
+  </div>;
 };

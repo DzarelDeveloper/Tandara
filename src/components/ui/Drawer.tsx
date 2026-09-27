@@ -11,7 +11,7 @@ interface DrawerProps {
   title: string;
   subtitle?: string;
   children: React.ReactNode;
-  width?: 'md' | 'lg' | 'xl';
+  width?: 'md' | 'lg' | 'xl' | '2xl';
 }
 
 export const Drawer: React.FC<DrawerProps> = ({
@@ -44,6 +44,7 @@ export const Drawer: React.FC<DrawerProps> = ({
     md: 'max-w-md',
     lg: 'max-w-xl',
     xl: 'max-w-2xl',
+    '2xl': 'max-w-[1100px]',
   };
 
   return (
@@ -57,7 +58,7 @@ export const Drawer: React.FC<DrawerProps> = ({
 
       <div className="fixed inset-y-0 right-0 max-w-full flex pl-0 sm:pl-10 pointer-events-none">
         <div
-          className={`w-screen ${widthClasses[width]} pointer-events-auto bg-white shadow-lg flex flex-col border-l border-slate-200 animate-in slide-in-from-right duration-200`}
+          className={`w-screen ${widthClasses[width]} pointer-events-auto bg-white shadow-md flex flex-col border-l border-slate-200 animate-in slide-in-from-right duration-200`}
         >
           {/* Header */}
           <div className="px-4 sm:px-6 py-4 border-b border-slate-200 flex items-start justify-between bg-slate-50/70">
@@ -78,7 +79,7 @@ export const Drawer: React.FC<DrawerProps> = ({
           </div>
 
           {/* Body */}
-          <div className="flex-1 overflow-y-auto p-4 sm:p-6">{children}</div>
+          <div className="flex-1 overflow-y-auto p-4 sm:p-5">{children}</div>
         </div>
       </div>
     </div>

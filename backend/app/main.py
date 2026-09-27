@@ -6,11 +6,12 @@ from argon2 import PasswordHasher
 from fastapi import FastAPI, Depends, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import inspect, select, text
 from sqlalchemy.orm import Session
 from .config import settings
-from .database import Base, engine, get_db
-from .models import User, ClassRoom, Guardian, Student, AttendanceSession, Attendance, LeaveRequest, AuditLog
+from .database import Base, SessionLocal, engine, get_db
+from .models import User, ClassRoom, Guardian, GuardianStudent, Student, AttendanceSession, Attendance, LeaveRequest, AuditLog
+from .services.face_engine import FaceEngineStatus, face_engine
 
 TZ=ZoneInfo(settings.timezone); pwd=PasswordHasher(); clients:set[WebSocket]=set()
 def localnow(): return datetime.now(TZ).replace(tzinfo=None)
@@ -42,11 +43,31 @@ def attendance_out(a): return {'id':str(a.id),'date':a.attendance_date.isoformat
 class GuardianIn(BaseModel): full_name:str; phone_number:str=Field(pattern=r'^(\+62|62|0)\d{8,13}$')
 class SessionIn(BaseModel): mode:str; camera_source:str=str(settings.camera_source)
 class ManualIn(BaseModel): student_id:int; mode:str; reason:str=Field(min_length=3); captured_at:datetime|None=None
-class ScanIn(BaseModel): session_id:int; student_id:int; confidence_score:float=Field(ge=0,le=1); captured_at:datetime|None=None
 class LeaveIn(BaseModel): student_id:int; leave_date:date; leave_type:str; reason:str=Field(min_length=3)
 class Patch(BaseModel): status:str|None=None; notes:str|None=None; check_in_time:datetime|None=None; check_out_time:datetime|None=None
 @asynccontextmanager
-async def lifespan(app): Base.metadata.create_all(engine); yield
+async def lifespan(app):
+    Base.metadata.create_all(engine)
+    # Non-destructive compatibility upgrade for development databases created
+    # before Guardian.is_active was introduced.
+    with engine.begin() as connection:
+        guardian_columns = {column['name'] for column in inspect(connection).get_columns('guardians')}
+        if 'is_active' not in guardian_columns:
+            connection.execute(text('ALTER TABLE guardians ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1'))
+    # Compatibility: preserve legacy Student.guardian_id while backfilling the many-to-many link once.
+    with SessionLocal() as db:
+        legacy = db.scalars(select(Student).where(Student.guardian_id.is_not(None))).all()
+        for student in legacy:
+            exists = db.scalar(select(GuardianStudent).where(GuardianStudent.guardian_id == student.guardian_id, GuardianStudent.student_id == student.id))
+            if not exists: db.add(GuardianStudent(guardian_id=student.guardian_id, student_id=student.id, relationship='Wali'))
+        db.commit()
+    try:
+        face_engine.initialize()
+    except Exception:
+        # Face diagnostics must remain available even when optional model startup fails.
+        face_engine.status = FaceEngineStatus.ERROR
+        face_engine.error_message = 'Face engine gagal diinisialisasi.'
+    yield
 app=FastAPI(title='Kena Scan Tandara API',version='0.1.0',lifespan=lifespan)
 app.add_middleware(CORSMiddleware,allow_origins=[x.strip() for x in settings.frontend_origin.split(',')],allow_credentials=False,allow_methods=['*'],allow_headers=['*'])
 @app.exception_handler(HTTPException)
@@ -56,7 +77,16 @@ async def http_error(_,e):
 from .routers.imports import router as imports_router
 app.include_router(imports_router)
 @app.get('/api/health')
-def health(): return {'success':True,'message':'Backend Tandara aktif','data':{'face_recognition':'NOT_CONFIGURED'}}
+def health():
+    database = {'status': 'error', 'type': 'sqlite' if settings.database_url.startswith('sqlite') else 'database'}
+    try:
+        with engine.connect() as connection:
+            connection.execute(text('SELECT 1'))
+        database['status'] = 'connected'
+    except Exception:
+        # Health output deliberately does not expose connection strings, paths, or driver errors.
+        pass
+    return {'success': True, 'message': 'Backend Tandara aktif', 'data': {'status': 'ok', 'database': database, 'face_recognition': face_engine.status.value}}
 # Register attendance, leave, and WebSocket routes in the default ASGI app too.
 # This keeps `uvicorn app.main:app` and the test entrypoint behaviour identical.
 from .routers.dashboards import router as dashboards_router
@@ -71,6 +101,7 @@ from .routers.classes import router as classes_router
 from .routers.users import router as users_router
 from .routers.auth import router as auth_router
 from .routers.websocket import router as websocket_router
+from .routers.face_enrollment import router as face_enrollment_router
 app.include_router(dashboards_router)
 app.include_router(reports_router)
 app.include_router(audit_logs_router)
@@ -83,3 +114,4 @@ app.include_router(classes_router)
 app.include_router(users_router)
 app.include_router(auth_router)
 app.include_router(websocket_router)
+app.include_router(face_enrollment_router)

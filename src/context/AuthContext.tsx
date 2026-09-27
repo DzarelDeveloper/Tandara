@@ -1,6 +1,6 @@
 /**
  * Tandara Auth Context
- * Provides mock authentication state management for frontend prototype.
+ * Provides authenticated session state backed by the FastAPI login endpoint.
  */
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
@@ -23,7 +23,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Check local storage for prototype session
+    // Restore safe session metadata; protected API calls still require the JWT.
     const current = authService.getCurrentSession();
     setSession(current);
     setIsLoading(false);

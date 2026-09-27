@@ -19,14 +19,13 @@ import { PageHeader } from '../../components/ui/PageHeader';
 import { FilterBar } from '../../components/ui/FilterBar';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { EmptyState } from '../../components/ui/EmptyState';
-import { BackendDisconnected } from '../../components/ui/BackendDisconnected';
 import { CorrectionFormModal } from '../../components/teacher/CorrectionFormModal';
 import { useToast } from '../../context/ToastContext';
 import { AttendanceCorrection } from '../../types';
 import { reportsService } from '../../services/reports.service';
 
 export const TeacherReportsCorrectionsPage: React.FC = () => {
-  const { showBackendNotConnected } = useToast();
+  const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<'reports' | 'corrections'>('reports');
 
   // Filters for Rekap Presensi
@@ -54,7 +53,7 @@ export const TeacherReportsCorrectionsPage: React.FC = () => {
       link.download = response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)"?/i)?.[1] || 'tandara-attendance.csv';
       link.click();
       URL.revokeObjectURL(link.href);
-    } catch (error) { showBackendNotConnected(error instanceof Error ? error.message : 'Gagal mengunduh laporan CSV.'); }
+    } catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal mengunduh laporan CSV.' }); }
     finally { setIsDownloading(false); }
   };
 
@@ -247,14 +246,14 @@ export const TeacherReportsCorrectionsPage: React.FC = () => {
               return (
                 <div
                   key={idx}
-                  className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex items-center justify-between"
+                  className="bg-white p-5 rounded-xl border border-slate-200 flex items-center justify-between"
                 >
                   <div>
                     <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">
                       {kpi.label}
                     </p>
                     <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 mt-1">{kpi.value}</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">Data backend belum aktif</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Belum ada data untuk dihitung</p>
                   </div>
                   <div className="w-10 h-10 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center shrink-0">
                     <Icon className={`w-5 h-5 ${kpi.color}`} />
@@ -265,7 +264,7 @@ export const TeacherReportsCorrectionsPage: React.FC = () => {
           </div>
 
           {/* Chart Container */}
-          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
+          <div className="bg-white rounded-xl border border-slate-200 p-5">
             <div className="flex items-center justify-between pb-3.5 border-b border-slate-100 mb-5">
               <div>
                 <h3 className="text-base font-semibold text-slate-900">Grafik Kehadiran Siswa</h3>

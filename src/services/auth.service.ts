@@ -1,9 +1,6 @@
 /**
  * Tandara Authentication Service
- * Currently runs mock authentication for frontend development.
- * Storing only temporary session data in localStorage.
- * Security Note: Client-side role checking is for prototype navigation only;
- * server-side authorization must be enforced once the FastAPI backend is connected.
+ * Authenticates against FastAPI and stores the JWT plus safe session metadata.
  */
 
 import { AuthSession, Role } from '../types';

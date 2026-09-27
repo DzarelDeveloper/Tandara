@@ -122,18 +122,10 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'sm' })
         </span>
       );
     case 'DISCONNECTED':
-    case 'Belum terhubung':
       return (
         <span className={`inline-flex items-center gap-1.5 font-medium rounded-md bg-slate-50 text-slate-700 border border-slate-200 ${sizeClasses}`}>
           <ServerOff className="w-3.5 h-3.5 text-slate-500" />
-          Belum terhubung
-        </span>
-      );
-    case 'WAITING_INTEGRATION':
-    case 'Menunggu integrasi':
-      return (
-        <span className={`inline-flex items-center gap-1.5 font-medium rounded-md bg-slate-50 text-slate-700 border border-slate-200 ${sizeClasses}`}>
-          Menunggu integrasi
+          Terputus
         </span>
       );
     default:

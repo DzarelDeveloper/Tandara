@@ -361,7 +361,7 @@ export const LoginPage: React.FC = () => {
               Akses Otomatis Berdasarkan Peran
             </h5>
             <p className="text-xs text-slate-600 leading-relaxed">
-              Sistem akan secara otomatis mengenali peran akun Anda (Admin IT atau Petugas Guru/Piket) setelah berhasil masuk, lalu mengarahkan ke dashboard kerja yang sesuai tanpa perlu memilih peran secara manual.
+              Sistem akan mengenali peran akun Admin IT, Guru/Piket, atau Orang Tua setelah login dan mengarahkan ke dashboard yang sesuai.
             </p>
           </div>
 

@@ -1,11 +1,22 @@
-from fastapi import APIRouter, Depends, HTTPException
+import logging
+import time
+from threading import Lock
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from datetime import date
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
+from ..config import settings
 from ..database import get_db
-from ..main import Attendance, AttendanceSession, ManualIn, Patch, ScanIn, Student, attendance_out, audit, broadcast, localnow, require, user_dep
+from ..main import Attendance, AttendanceSession, ManualIn, Patch, Student, attendance_out, audit, broadcast, localnow, require, user_dep
+from ..services.face_recognition import face_recognition_service
 router=APIRouter(tags=['Attendance'])
-def fail(c,m):raise HTTPException(c,{'success':False,'message':m,'errors':{},'code':'REQUEST_ERROR'})
+logger = logging.getLogger(__name__)
+_scan_cooldowns: dict[tuple[int, int, str], float] = {}
+_scan_lock = Lock()
+
+
+def fail(c,m,code='REQUEST_ERROR'):raise HTTPException(c,{'success':False,'message':m,'errors':{},'code':code})
 def take(db,student_id,mode,method,user,confidence=None,notes=None):
  s=db.get(Student,student_id)
  if not s or not s.is_active:fail(404,'Siswa aktif tidak ditemukan.')
@@ -24,10 +35,86 @@ def take(db,student_id,mode,method,user,confidence=None,notes=None):
 async def manual(body:ManualIn,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
  a=take(db,body.student_id,body.mode,'MANUAL',u,notes=body.reason);audit(db,u,'MANUAL_ATTENDANCE','Attendance',a.id,body.reason);db.commit();await broadcast('ATTENDANCE_SUCCESS',{'student_id':a.student_id,'student_name':a.student.full_name,'mode':body.mode,'confidence':None});return {'success':True,'data':attendance_out(a)}
 @router.post('/api/attendance/scan')
-async def scan(body:ScanIn,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
- sess=db.get(AttendanceSession,body.session_id)
- if not sess or sess.status!='ACTIVE':fail(422,'Sesi absensi tidak aktif.')
- a=take(db,body.student_id,sess.mode,'FACE',u,body.confidence_score);audit(db,u,'SCAN','Attendance',a.id,'Absensi wajah');db.commit();await broadcast('ATTENDANCE_SUCCESS',{'student_id':a.student_id,'student_name':a.student.full_name,'mode':sess.mode,'confidence':body.confidence_score});return {'success':True,'data':attendance_out(a)}
+async def scan(session_id: int = Form(...), image: UploadFile = File(...), db: Session = Depends(get_db), u=Depends(require('ADMIN_IT', 'GURU_PIKET'))):
+  session = db.get(AttendanceSession, session_id)
+  if not session or session.status != 'ACTIVE' or session.session_date.date() != localnow().date():
+    fail(422, 'Sesi absensi tidak aktif.', 'SESSION_NOT_ACTIVE')
+  if session.mode not in ('CHECK_IN', 'CHECK_OUT'):
+    fail(422, 'Mode sesi absensi tidak valid.', 'INVALID_SESSION_MODE')
+  if not image.content_type or not image.content_type.startswith('image/'):
+    fail(422, 'File harus berupa gambar.', 'INVALID_IMAGE')
+  content = await image.read(settings.max_upload_mb * 1024 * 1024 + 1)
+  if not content or len(content) > settings.max_upload_mb * 1024 * 1024:
+    fail(413 if content else 422, 'Ukuran gambar tidak valid.', 'IMAGE_TOO_LARGE' if content else 'INVALID_IMAGE')
+
+  result = face_recognition_service.recognize_image(content, db)
+  if result.status != 'RECOGNIZED' or result.student_id is None:
+    logger.info('Face scan rejected status=%s total_ms=%.2f', result.status, result.timings_ms.get('total', 0.0))
+    messages = {
+      'UNKNOWN_FACE': 'Wajah tidak dikenali.',
+      'AMBIGUOUS_FACE': 'Identitas wajah belum cukup meyakinkan.',
+      'FACE_NOT_DETECTED': 'Wajah belum terdeteksi.',
+      'MULTIPLE_FACES': 'Pastikan hanya satu orang di depan kamera.',
+      'FACE_TOO_BLURRY': 'Gambar terlalu buram.',
+      'FACE_TOO_DARK': 'Pencahayaan terlalu gelap.',
+      'FACE_TOO_BRIGHT': 'Pencahayaan terlalu terang.',
+      'FACE_TOO_SMALL': 'Dekatkan wajah ke kamera.',
+      'FACE_OUT_OF_FRAME': 'Posisikan wajah sepenuhnya di dalam frame.',
+      'NO_ENROLLED_FACES': 'Belum ada wajah siswa yang terdaftar.',
+      'ENGINE_NOT_READY': 'Mesin pengenalan wajah belum siap.',
+      'INVALID_IMAGE': 'File gambar tidak valid.',
+    }
+    status_code = 503 if result.status in ('ENGINE_NOT_READY', 'NO_ENROLLED_FACES') else 422
+    fail(status_code, messages.get(result.status, 'Pengenalan wajah gagal.'), result.status)
+
+  key = (result.student_id, session.id, session.mode)
+  with _scan_lock:
+    now = time.monotonic()
+    cooldown = max(0, settings.face_scan_cooldown_seconds)
+    _scan_cooldowns.update({k: v for k, v in list(_scan_cooldowns.items()) if now - v < max(cooldown, 60)})
+    if key in _scan_cooldowns and now - _scan_cooldowns[key] < cooldown:
+      fail(409, 'Wajah baru saja dipindai.', 'DUPLICATE_SCAN')
+    try:
+      attendance_record = take(db, result.student_id, session.mode, 'FACE', u)
+      audit(db, u, 'SCAN', 'Attendance', attendance_record.id, 'Absensi wajah')
+      db.commit()
+    except HTTPException as exc:
+      db.rollback()
+      if exc.status_code == 409:
+        fail(409, 'Wajah sudah dipindai untuk mode sesi ini.', 'DUPLICATE_SCAN')
+      raise
+    except Exception:
+      db.rollback()
+      raise
+    _scan_cooldowns[key] = time.monotonic()
+
+  data = attendance_out(attendance_record)
+  data.update({'mode': session.mode, 'method': 'FACE', 'similarity': result.similarity, 'faceBox': result.face_box, 'recordedAt': localnow().isoformat()})
+  event = {
+    'student_id': attendance_record.student_id,
+    'student_name': attendance_record.student.full_name,
+    'nis': attendance_record.student.nis,
+    'class_name': attendance_record.student.classroom.name,
+    'mode': session.mode,
+    'confidence': None,
+    'similarity': result.similarity,
+    'method': 'FACE',
+  }
+  try:
+    await broadcast('ATTENDANCE_SUCCESS', event)
+  except Exception:
+    logger.exception('Attendance committed but scan broadcast failed for student_id=%s', attendance_record.student_id)
+  logger.info(
+    'Face scan recorded student_id=%s mode=%s index_ms=%.2f detection_ms=%.2f embedding_ms=%.2f matching_ms=%.2f total_ms=%.2f',
+    attendance_record.student_id,
+    session.mode,
+    result.timings_ms.get('index', 0.0),
+    result.timings_ms.get('detection', 0.0),
+    result.timings_ms.get('embedding', 0.0),
+    result.timings_ms.get('matching', 0.0),
+    result.timings_ms.get('total', 0.0),
+  )
+  return {'success': True, 'data': data}
 @router.get('/api/attendance')
 def attendance(today:bool=False,date_from:date|None=None,date_to:date|None=None,status:str|None=None,db:Session=Depends(get_db),u=Depends(user_dep)):
  q=select(Attendance).order_by(Attendance.attendance_date.desc())

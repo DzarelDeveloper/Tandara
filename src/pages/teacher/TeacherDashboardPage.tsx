@@ -1,225 +1,72 @@
-/**
- * Tandara Guru / Piket - Dashboard Page
- * Route: /teacher/dashboard
- */
-
-import React, { useState } from 'react';
-import {
-  CheckCircle2,
-  Clock,
-  AlertCircle,
-  XCircle,
-  Video,
-  FileClock,
-  ShieldCheck,
-  Calendar,
-  Layers,
-  AlertTriangle,
-} from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { AlertCircle, CheckCircle2, Clock, Video, XCircle, ArrowRight } from 'lucide-react';
 import { PageHeader } from '../../components/ui/PageHeader';
-import { EmptyState } from '../../components/ui/EmptyState';
-import { BackendDisconnected } from '../../components/ui/BackendDisconnected';
 import { StartSessionModal } from '../../components/teacher/StartSessionModal';
 import { useAuth } from '../../context/AuthContext';
+import { dashboardService, TeacherDashboardStats } from '../../services/dashboard.service';
+import { StatCard } from '../../components/ui/StatCard';
 
 export const TeacherDashboardPage: React.FC = () => {
   const { session } = useAuth();
   const [showSessionModal, setShowSessionModal] = useState(false);
+  const [stats, setStats] = useState<TeacherDashboardStats | null>(null);
 
-  const currentDateFormatted = new Intl.DateTimeFormat('id-ID', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
+  useEffect(() => {
+    dashboardService.teacher().then(setStats).catch(() => setStats(null));
+  }, []);
+
+  const currentDate = new Intl.DateTimeFormat('id-ID', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
   }).format(new Date());
 
   const kpis = [
-    { label: 'Hadir', value: '—', icon: CheckCircle2, color: 'text-emerald-600' },
-    { label: 'Terlambat', value: '—', icon: Clock, color: 'text-amber-600' },
-    { label: 'Izin / Sakit', value: '—', icon: AlertCircle, color: 'text-blue-600' },
-    { label: 'Belum Hadir', value: '—', icon: XCircle, color: 'text-red-600' },
+    { label: 'Hadir', value: stats?.presentToday ?? 0, icon: CheckCircle2, color: 'text-emerald-600', helper: 'siswa hari ini' },
+    { label: 'Terlambat', value: stats?.lateToday ?? 0, icon: Clock, color: 'text-amber-600', helper: 'siswa hari ini' },
+    { label: 'Izin / Sakit', value: stats?.excusedToday ?? 0, icon: AlertCircle, color: 'text-blue-600', helper: 'siswa hari ini' },
+    { label: 'Belum Hadir', value: stats?.notPresent ?? 0, icon: XCircle, color: 'text-red-600', helper: 'siswa hari ini' },
   ];
 
   return (
     <div className="space-y-6">
-      {/* Page Header */}
       <PageHeader
-        title={`Selamat pagi, ${session?.displayName?.split(' ')[0] || 'Bu Siti'}`}
-        subtitle={`Operasional piket harian dan pemantauan absensi siswa per ${currentDateFormatted}`}
-        actions={
-          <button
-            type="button"
-            onClick={() => setShowSessionModal(true)}
-            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white bg-[#2563EB] hover:bg-[#1D4ED8] rounded-lg shadow-xs transition-colors focus:ring-2 focus:ring-blue-500 focus:outline-none"
-          >
-            <Video className="w-4 h-4" />
-            Mulai Sesi Absensi
-          </button>
-        }
+        title={`Selamat pagi, ${session?.displayName || 'Guru Piket'}`}
+        subtitle={currentDate}
+        actions={<button type="button" onClick={() => setShowSessionModal(true)} className="t-button-primary"><Video className="w-4 h-4" /> Mulai Absensi</button>}
       />
 
-      <BackendDisconnected moduleName="Dashboard Guru / Piket" />
+      <section aria-label="Ringkasan kehadiran" className="grid grid-cols-2 xl:grid-cols-4 gap-3 sm:gap-4">
+        {kpis.map((item) => <StatCard key={item.label} label={item.label} value={item.value} icon={item.icon} iconClassName={item.color} helper={item.helper} />)}
+      </section>
 
-      {/* Duty Card: Piket Hari Ini (Solid #0F1F3D) */}
-      <div className="bg-[#0F1F3D] text-white p-5 sm:p-6 rounded-xl border border-[#1a2d52] shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-        <div className="flex items-start sm:items-center gap-3.5">
-          <div className="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center text-teal-300 shrink-0 border border-white/10">
-            <ShieldCheck className="w-5 h-5" />
+      <section className="grid grid-cols-1 xl:grid-cols-[minmax(0,2fr)_minmax(280px,1fr)] gap-6">
+        <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-col">
+          <div className="flex items-start justify-between gap-4">
+            <div><p className="text-xs font-semibold uppercase tracking-[0.12em] text-blue-600">Operasional Hari Ini</p><h2 className="text-xl font-semibold text-slate-900 mt-1">Sesi Presensi</h2></div>
+            <span className={`text-xs font-semibold rounded-md px-2.5 py-1 border ${stats?.session ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-slate-50 border-slate-200 text-slate-600'}`}>{stats?.session ? 'AKTIF' : 'BELUM AKTIF'}</span>
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold uppercase tracking-wider text-teal-300">
-                Piket Hari Ini
-              </span>
-              <span className="text-xs text-slate-400">&bull;</span>
-              <span className="text-xs text-slate-300">{currentDateFormatted}</span>
-            </div>
-            <h2 className="text-base sm:text-lg font-bold text-white mt-0.5">
-              Petugas Aktif: {session?.displayName || 'Siti Nurhaliza'}
-            </h2>
-            <p className="text-xs text-slate-300 mt-0.5">
-              Tugas: Memantau gerbang masuk, memverifikasi permohonan izin orang tua, dan rekapitulasi harian.
-            </p>
+          <div className="flex-1 flex flex-col justify-center py-6">
+            {stats?.session ? (
+              <div><p className="text-3xl font-bold tracking-tight text-slate-900">{stats.session.mode.replace('_', ' ')}</p><p className="text-sm text-slate-500 mt-2">Kamera {stats.session.cameraSource} siap untuk pemindaian.</p><Link to="/teacher/live-attendance" className="t-button-primary inline-flex mt-6">Buka Kamera <ArrowRight className="w-4 h-4" /></Link></div>
+            ) : (
+              <div><Video className="w-8 h-8 text-blue-600 mb-4" /><h3 className="text-lg font-semibold text-slate-900">Belum ada sesi aktif.</h3><p className="text-sm text-slate-500 mt-2 max-w-lg">Mulai sesi CHECK_IN atau CHECK_OUT untuk menjalankan pemindaian wajah di halaman Absensi Langsung.</p><button type="button" onClick={() => setShowSessionModal(true)} className="t-button-primary mt-6">Mulai Sesi Absensi</button></div>
+            )}
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setShowSessionModal(true)}
-          className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-[#2563EB] hover:bg-[#1D4ED8] rounded-lg transition-colors shadow-xs shrink-0 self-start md:self-auto"
-        >
-          <Video className="w-4 h-4" />
-          Buka Absensi Kamera
-        </button>
-      </div>
+        <aside className="bg-white border border-slate-200 rounded-xl p-5">
+          <h2 className="text-lg font-semibold text-slate-900">Ringkasan Kehadiran</h2><p className="text-sm text-slate-500 mt-1">Status siswa berdasarkan data hari ini.</p>
+          <dl className="mt-5 divide-y divide-slate-100">{kpis.map((item) => <div key={item.label} className="py-3 flex items-center justify-between gap-4 first:pt-0"><dt className="text-sm text-slate-600">{item.label}</dt><dd className="text-base font-semibold tabular-nums text-slate-900">{item.value}</dd></div>)}</dl>
+        </aside>
+      </section>
 
-      {/* 4 KPI Cards (All values '—') */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {kpis.map((kpi, idx) => {
-          const Icon = kpi.icon;
-          return (
-            <div
-              key={idx}
-              className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs flex items-center justify-between"
-            >
-              <div>
-                <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">
-                  {kpi.label}
-                </p>
-                <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 mt-1">{kpi.value}</p>
-                <p className="text-[11px] text-slate-400 mt-0.5">Data backend belum aktif</p>
-              </div>
-              <div className="w-10 h-10 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center shrink-0">
-                <Icon className={`w-5 h-5 ${kpi.color}`} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Session Panel & Attendance Progress */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Session Panel (2 cols) */}
-        <div className="lg:col-span-2 bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
-          <div className="flex items-center justify-between pb-3.5 border-b border-slate-100 mb-4">
-            <div>
-              <h3 className="text-base font-semibold text-slate-900">Status Sesi Presensi Langsung</h3>
-              <p className="text-xs text-slate-500">Kamera pendeteksi wajah DroidCam</p>
-            </div>
-            <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-800 border border-amber-200">
-              Belum Aktif
-            </span>
-          </div>
-
-          <EmptyState
-            icon={Video}
-            title="Belum ada sesi absensi aktif."
-            description="Mulai sesi untuk mengaktifkan pemindaian wajah siswa di gerbang masuk atau pulang sekolah."
-            actionText="Mulai Sesi Absensi"
-            onAction={() => setShowSessionModal(true)}
-            className="py-10"
-          />
+      <section>
+        <div className="flex items-end justify-between gap-4 mb-4"><div><h2 className="text-lg font-semibold text-slate-900">Aktivitas Absensi Terbaru</h2><p className="text-sm text-slate-500 mt-1">Pencatatan terbaru dari backend hari ini.</p></div><Link to="/teacher/attendance" className="text-sm font-semibold text-blue-600 hover:text-blue-700">Lihat riwayat</Link></div>
+        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+          {stats?.recentAttendance?.length ? <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr><th className="text-left px-5 py-3">Siswa</th><th className="text-left px-5 py-3">NIS</th><th className="text-left px-5 py-3">Kelas</th><th className="text-left px-5 py-3">Masuk</th><th className="text-left px-5 py-3">Pulang</th></tr></thead><tbody className="divide-y divide-slate-100">{stats.recentAttendance.map((record) => <tr key={record.id}><td className="px-5 py-3.5 font-medium text-slate-900">{record.studentName}</td><td className="px-5 py-3.5 text-slate-600">{record.nis}</td><td className="px-5 py-3.5 text-slate-600">{record.className}</td><td className="px-5 py-3.5 text-slate-600">{record.checkInTime ? new Date(record.checkInTime).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '—'}</td><td className="px-5 py-3.5 text-slate-600">{record.checkOutTime ? new Date(record.checkOutTime).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) : '—'}</td></tr>)}</tbody></table></div> : <div className="px-6 py-12 text-center"><p className="font-medium text-slate-800">Belum ada aktivitas absensi hari ini.</p><p className="text-sm text-slate-500 mt-1">Hasil presensi akan muncul setelah siswa berhasil dipindai.</p></div>}
         </div>
+      </section>
 
-        {/* Attendance Progress by Grade (1 col) */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-3.5 border-b border-slate-100 mb-4">
-              <div>
-                <h3 className="text-base font-semibold text-slate-900">Kehadiran per Tingkat</h3>
-                <p className="text-xs text-slate-500">Progres kelas 10, 11, dan 12</p>
-              </div>
-              <Layers className="w-4 h-4 text-slate-400" />
-            </div>
-
-            <EmptyState
-              title="Belum ada data progres."
-              description="Persentase kehadiran per tingkat akan terhitung secara real-time saat sesi berjalan."
-              className="py-6"
-            />
-          </div>
-
-          <div className="pt-3 border-t border-slate-100 text-center text-xs text-slate-400 font-mono">
-            Total target: — siswa
-          </div>
-        </div>
-      </div>
-
-      {/* Secondary Grid: Pengajuan Menunggu & Perlu Verifikasi & Aktivitas Terbaru */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Panel Pengajuan Menunggu */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
-            <div className="flex items-center gap-2">
-              <FileClock className="w-4 h-4 text-blue-600" />
-              <h3 className="text-sm font-semibold text-slate-900">Pengajuan Izin Menunggu</h3>
-            </div>
-            <span className="text-xs text-slate-400 font-mono">0</span>
-          </div>
-
-          <EmptyState
-            title="Belum ada pengajuan izin."
-            description="Pengajuan surat sakit/izin dari aplikasi orang tua akan langsung muncul di sini."
-            className="py-6"
-          />
-        </div>
-
-        {/* Alert Panel Verifikasi Manual */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-500" />
-              <h3 className="text-sm font-semibold text-slate-900">Verifikasi Manual</h3>
-            </div>
-            <span className="text-xs text-slate-400 font-mono">0</span>
-          </div>
-
-          <EmptyState
-            title="Belum ada siswa memerlukan verifikasi."
-            description="Jika wajah tidak terbaca optimal atau terjadi kendala pencahayaan, guru piket dapat mengonfirmasi identitas siswa."
-            className="py-6"
-          />
-        </div>
-
-        {/* Panel Aktivitas Terbaru */}
-        <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
-            <div className="flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-slate-400" />
-              <h3 className="text-sm font-semibold text-slate-900">Aktivitas Terbaru</h3>
-            </div>
-            <span className="text-xs text-slate-400">Hari ini</span>
-          </div>
-
-          <EmptyState
-            title="Belum ada aktivitas presensi."
-            description="Catatan waktu absensi siswa hari ini akan terekam secara kronologis."
-            className="py-6"
-          />
-        </div>
-      </div>
-
-      {/* Start Session Modal */}
       <StartSessionModal isOpen={showSessionModal} onClose={() => setShowSessionModal(false)} />
     </div>
   );

@@ -59,7 +59,7 @@ export const Modal: React.FC<ModalProps> = ({
     >
       <div
         ref={modalRef}
-        className={`w-full ${maxWidthClasses[maxWidth]} bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden my-8`}
+        className={`w-full ${maxWidthClasses[maxWidth]} bg-white rounded-xl shadow-md border border-slate-200 overflow-hidden my-8`}
       >
         {/* Header */}
         <div className="px-4 sm:px-6 py-4 border-b border-slate-100 flex items-start justify-between bg-slate-50/50">

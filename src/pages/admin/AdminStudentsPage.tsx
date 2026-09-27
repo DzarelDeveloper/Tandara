@@ -3,16 +3,19 @@
  * Route: /admin/students
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { UserPlus, UploadCloud, ScanFace } from 'lucide-react';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { FilterBar } from '../../components/ui/FilterBar';
 import { DataTable, Column } from '../../components/ui/DataTable';
-import { BackendDisconnected } from '../../components/ui/BackendDisconnected';
 import { StudentFormModal } from '../../components/admin/StudentFormModal';
 import { StudentImportModal } from '../../components/admin/StudentImportModal';
 import { FaceEnrollmentDrawer } from '../../components/admin/FaceEnrollmentDrawer';
-import { Student } from '../../types';
+import { Class, Student } from '../../types';
+import { studentsService } from '../../services/students.service';
+import { useToast } from '../../context/ToastContext';
+import { faceEnrollmentService } from '../../services/face-enrollment.service';
+import { classesService } from '../../services/classes.service';
 
 export const AdminStudentsPage: React.FC = () => {
   const [search, setSearch] = useState('');
@@ -22,6 +25,16 @@ export const AdminStudentsPage: React.FC = () => {
   const [showStudentModal, setShowStudentModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showFaceDrawer, setShowFaceDrawer] = useState(false);
+  const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [classes, setClasses] = useState<Class[]>([]);
+  const { showToast } = useToast();
+
+  const loadStudents = async () => {
+    try { setStudents(await studentsService.getStudents()); }
+    catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal memuat data siswa.' }); }
+  };
+  useEffect(() => { void loadStudents(); classesService.getClasses().then(setClasses).catch((error) => showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal memuat kelas.' })); }, []);
 
   // Table columns definition ready for future student objects
   const columns: Column<Student>[] = [
@@ -84,19 +97,21 @@ export const AdminStudentsPage: React.FC = () => {
       key: 'actions',
       header: 'Aksi',
       className: 'text-right',
-      render: () => (
-        <button
-          type="button"
-          className="text-xs text-[#2563EB] hover:text-[#1D4ED8] font-medium"
-        >
-          Detail
-        </button>
+      render: (item) => (
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={() => { setSelectedStudent(item); setShowFaceDrawer(true); }} className="text-xs text-[#2563EB] hover:text-[#1D4ED8] font-medium">
+            {item.faceRegistered ? 'Daftarkan Ulang' : 'Daftarkan Wajah'}
+          </button>
+          {item.faceRegistered && <button type="button" onClick={async () => { if (!window.confirm('Hapus enrollment biometrik siswa ini?')) return; try { await faceEnrollmentService.remove(item.id); await loadStudents(); showToast({ type: 'success', message: 'Enrollment wajah dihapus.' }); } catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal menghapus enrollment wajah.' }); } }} className="text-xs text-red-600 hover:text-red-800 font-medium">Hapus Wajah</button>}
+        </div>
       ),
     },
   ];
 
-  // No fake student records
-  const students: Student[] = [];
+  const filteredStudents = useMemo(() => students.filter((student) => {
+    const query = search.toLowerCase();
+    return (!query || `${student.fullName} ${student.nis}`.toLowerCase().includes(query)) && (!selectedClass || student.classId === selectedClass) && (!selectedFaceStatus || (selectedFaceStatus === 'REGISTERED' ? student.faceRegistered : !student.faceRegistered));
+  }), [search, selectedClass, selectedFaceStatus, students]);
 
   const handleResetFilters = () => {
     setSearch('');
@@ -145,8 +160,6 @@ export const AdminStudentsPage: React.FC = () => {
         }
       />
 
-      <BackendDisconnected moduleName="Basis Data Siswa & Biometrik" />
-
       {/* Filter and Search Bar */}
       <FilterBar
         searchValue={search}
@@ -162,9 +175,7 @@ export const AdminStudentsPage: React.FC = () => {
           className="px-3 py-2 text-xs sm:text-sm bg-slate-50 hover:bg-slate-100/70 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
         >
           <option value="">Semua Kelas</option>
-          <option value="10">Kelas 10</option>
-          <option value="11">Kelas 11</option>
-          <option value="12">Kelas 12</option>
+          {classes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select>
 
         <select
@@ -182,17 +193,17 @@ export const AdminStudentsPage: React.FC = () => {
       {/* Data Table with Meaningful Empty State */}
       <DataTable
         columns={columns}
-        data={students}
+        data={filteredStudents}
         emptyTitle="Belum ada data siswa."
-        emptyDescription="Tambahkan siswa setelah backend tersedia."
+        emptyDescription="Data siswa akan muncul setelah tersedia di backend."
         emptyActionText="Tambah Siswa Baru"
         onEmptyAction={() => setShowStudentModal(true)}
       />
 
       {/* Modals & Drawer */}
-      <StudentFormModal isOpen={showStudentModal} onClose={() => setShowStudentModal(false)} />
+      <StudentFormModal isOpen={showStudentModal} onClose={() => setShowStudentModal(false)} onCreated={loadStudents} />
       <StudentImportModal isOpen={showImportModal} onClose={() => setShowImportModal(false)} />
-      <FaceEnrollmentDrawer isOpen={showFaceDrawer} onClose={() => setShowFaceDrawer(false)} />
+      <FaceEnrollmentDrawer isOpen={showFaceDrawer} onClose={() => { setShowFaceDrawer(false); setSelectedStudent(null); }} students={students} selectedStudent={selectedStudent} onCompleted={loadStudents} />
     </div>
   );
 };
