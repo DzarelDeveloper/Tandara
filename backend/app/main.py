@@ -102,6 +102,7 @@ from .routers.users import router as users_router
 from .routers.auth import router as auth_router
 from .routers.websocket import router as websocket_router
 from .routers.face_enrollment import router as face_enrollment_router
+from .routers.parent import router as parent_router
 app.include_router(dashboards_router)
 app.include_router(reports_router)
 app.include_router(audit_logs_router)
@@ -115,3 +116,4 @@ app.include_router(users_router)
 app.include_router(auth_router)
 app.include_router(websocket_router)
 app.include_router(face_enrollment_router)
+app.include_router(parent_router)

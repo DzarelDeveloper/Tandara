@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, Integer, Boolean, Date, DateTime, Float, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import String, Integer, Boolean, Date, DateTime, Float, ForeignKey, JSON, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 def now(): return datetime.now()
@@ -27,3 +27,16 @@ class LeaveRequest(Base):
     __tablename__='leave_requests'; id: Mapped[int]=mapped_column(primary_key=True); student_id: Mapped[int]=mapped_column(ForeignKey('students.id')); leave_date: Mapped[Date]=mapped_column(Date); leave_type: Mapped[str]=mapped_column(String(20)); reason: Mapped[str]=mapped_column(Text); evidence_path: Mapped[str|None]=mapped_column(String(255),nullable=True); status: Mapped[str]=mapped_column(String(12),default='PENDING'); submitted_by: Mapped[int]=mapped_column(ForeignKey('users.id')); reviewed_by: Mapped[int|None]=mapped_column(ForeignKey('users.id'),nullable=True); review_note: Mapped[str|None]=mapped_column(Text,nullable=True); created_at: Mapped[datetime]=mapped_column(DateTime,default=now); reviewed_at: Mapped[datetime|None]=mapped_column(DateTime,nullable=True); student=relationship('Student')
 class AuditLog(Base):
     __tablename__='audit_logs'; id: Mapped[int]=mapped_column(primary_key=True); user_id: Mapped[int|None]=mapped_column(ForeignKey('users.id'),nullable=True); action: Mapped[str]=mapped_column(String(80)); entity_type: Mapped[str]=mapped_column(String(80)); entity_id: Mapped[str|None]=mapped_column(String(50),nullable=True); description: Mapped[str]=mapped_column(Text); created_at: Mapped[datetime]=mapped_column(DateTime,default=now)
+class Notification(Base):
+    __tablename__='notifications'
+    id: Mapped[int]=mapped_column(primary_key=True)
+    recipient_user_id: Mapped[int]=mapped_column(ForeignKey('users.id'),index=True)
+    student_id: Mapped[int|None]=mapped_column(ForeignKey('students.id'),nullable=True,index=True)
+    type: Mapped[str]=mapped_column(String(40),index=True)
+    title: Mapped[str]=mapped_column(String(120))
+    message: Mapped[str]=mapped_column(Text)
+    payload_json: Mapped[dict|None]=mapped_column(JSON,nullable=True)
+    is_read: Mapped[bool]=mapped_column(Boolean,default=False,index=True)
+    read_at: Mapped[datetime|None]=mapped_column(DateTime,nullable=True)
+    created_at: Mapped[datetime]=mapped_column(DateTime,default=now,index=True)
+    student=relationship('Student')

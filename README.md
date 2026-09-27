@@ -62,7 +62,10 @@ Presensi manual membutuhkan waktu dan pencatatan masuk serta pulang dapat terseb
 - Autentikasi dan profil orang tua.
 - Daftar siswa yang terhubung dengan akun.
 - Akses detail siswa yang dilindungi oleh relasi orang tua–siswa.
-- **Dalam pengembangan:** monitoring presensi real-time dan push notification.
+- Dashboard presensi hari ini dan riwayat presensi terpaginated.
+- Notifikasi presensi dan keputusan izin yang tersimpan persisten.
+- Monitoring notifikasi real-time melalui WebSocket khusus Parent.
+- **Belum diimplementasikan:** push notification Firebase/FCM.
 
 ## Cara Kerja
 
@@ -78,7 +81,8 @@ flowchart LR
     H --> I[(SQLite)]
     H -->|WebSocket| J[Dashboard Guru]
     I --> K[Portal Admin]
-    I -.-> L[Portal Orang Tua]
+    I --> L[Parent API]
+    L --> M[Parent WebSocket]
 ```
 
 DroidCam tidak berkomunikasi langsung dengan FastAPI. Aplikasi DroidCam membuat perangkat webcam virtual; browser membacanya melalui `MediaDevices`, lalu frontend mengirim frame yang dipilih ke API.
@@ -323,8 +327,8 @@ Tandara saat ini berfokus pada demonstrasi end-to-end lokal: pengelolaan data se
 
 Tahap berikutnya:
 
-- [ ] Monitoring presensi real-time untuk orang tua.
-- [ ] Push notification kepada orang tua/wali.
+- [x] Parent API, notifikasi persisten, dan WebSocket real-time.
+- [ ] Push notification Firebase/FCM.
 - [ ] Kalibrasi threshold menggunakan data representatif dan protokol evaluasi yang terdokumentasi.
 - [ ] Enkripsi data sensitif, hardening, observability, serta strategi backup/restore untuk deployment non-demo.
 - [ ] Validasi lintas perangkat kamera dan pengujian operasional di lingkungan sekolah yang berizin.

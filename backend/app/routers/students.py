@@ -7,6 +7,7 @@ from ..database import get_db
 from ..main import ClassRoom, Guardian, Student, audit, error, require, user_dep
 from ..services.face_recognition import face_recognition_service
 from ..models import GuardianAccount, GuardianStudent
+from ..services.parent_access import get_parent_student, get_parent_student_ids
 
 
 class StudentIn(BaseModel):
@@ -27,9 +28,8 @@ router=APIRouter(tags=['Students'])
 def students(q:str='',class_id:int|None=None,face_status:str|None=None,page:int=1,page_size:int=50,db:Session=Depends(get_db),u=Depends(user_dep)):
  s=select(Student).where(Student.is_active==True)
  if u.role=='PARENT':
-  account=db.scalar(select(GuardianAccount).where(GuardianAccount.user_id==u.id))
-  if not account:return {'success':True,'data':[]}
-  s=s.join(GuardianStudent,GuardianStudent.student_id==Student.id).where(GuardianStudent.guardian_id==account.guardian_id)
+  student_ids=get_parent_student_ids(u,db)
+  s=s.where(Student.id.in_(student_ids))
  if q:s=s.where(or_(Student.nis.contains(q),Student.full_name.contains(q)))
  if class_id:s=s.where(Student.class_id==class_id)
  if face_status:s=s.where(Student.face_enrollment_status==face_status)
@@ -49,9 +49,7 @@ def get_student(id:int,db:Session=Depends(get_db),u=Depends(user_dep)):
  x=db.get(Student,id)
  if not x:error(404,'Siswa tidak ditemukan.','NOT_FOUND')
  if u.role=='PARENT':
-  account=db.scalar(select(GuardianAccount).where(GuardianAccount.user_id==u.id))
-  linked=account and db.scalar(select(GuardianStudent).where(GuardianStudent.guardian_id==account.guardian_id,GuardianStudent.student_id==id))
-  if not linked:error(404,'Siswa tidak ditemukan.','NOT_FOUND')
+  x=get_parent_student(u,id,db)
  return {'success':True,'data':student_out(x)}
 @router.patch('/api/students/{id}')
 def update_student(id:int,body:StudentIn,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT'))):

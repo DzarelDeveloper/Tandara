@@ -8,6 +8,7 @@ from ..database import get_db
 from ..main import Guardian, Student, User, audit, error, pwd, require
 from ..models import GuardianAccount, GuardianStudent
 from ..services.usernames import generate_unique_username
+from ..services.parent_access import get_parent_guardian
 
 router = APIRouter(tags=['Guardians'])
 
@@ -170,11 +171,7 @@ def guardian_status(guardian_id: int, active: bool, db: Session = Depends(get_db
 
 
 def current_parent(u: User, db: Session) -> Guardian:
-    if u.role != 'PARENT': error(403, 'Akses khusus akun orang tua.', 'FORBIDDEN')
-    account = db.scalar(select(GuardianAccount).where(GuardianAccount.user_id == u.id))
-    guardian = db.get(Guardian, account.guardian_id) if account else None
-    if not guardian or not guardian.is_active: error(403, 'Akun orang tua tidak aktif.', 'FORBIDDEN')
-    return guardian
+    return get_parent_guardian(u, db)
 
 
 @router.get('/api/parent/profile')
