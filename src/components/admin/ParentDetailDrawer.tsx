@@ -107,17 +107,17 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
           <div>
             <div className="flex items-center justify-between mb-2">
               <h5 className="text-xs font-semibold text-slate-700 uppercase">Siswa Terhubung</h5>
-              <button
+              {parent.connectedStudents.length === 0 && <button
                 type="button"
                 onClick={async () => { try { setStudents(await studentsService.getStudents()); } catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal memuat siswa.' }); } }}
                 className="text-xs text-[#2563EB] hover:text-[#1D4ED8] font-medium flex items-center gap-1"
               >
                 <Link className="w-3 h-3" />
-                Hubungkan Siswa
-              </button>
+                Tetapkan Siswa
+              </button>}
             </div>
 
-            {students.length > 0 && <div className="flex gap-2 mb-2"><select value={studentId} onChange={(event) => setStudentId(event.target.value)} className="flex-1 text-xs border rounded px-2 py-1"><option value="">Pilih siswa</option>{students.map((student) => <option key={student.id} value={student.id}>{student.fullName} ({student.nis})</option>)}</select><button type="button" onClick={handleLinkStudent} disabled={!studentId} className="text-xs font-semibold text-blue-600 disabled:opacity-50">Simpan</button></div>}
+            {students.length > 0 && parent.connectedStudents.length === 0 && <div className="flex gap-2 mb-2"><select value={studentId} onChange={(event) => setStudentId(event.target.value)} className="flex-1 text-xs border rounded px-2 py-1"><option value="">Pilih satu siswa</option>{students.map((student) => <option key={student.id} value={student.id}>{student.fullName} ({student.nis})</option>)}</select><button type="button" onClick={handleLinkStudent} disabled={!studentId} className="text-xs font-semibold text-blue-600 disabled:opacity-50">Simpan</button></div>}
 
             <div className="rounded-xl border border-slate-200 bg-white text-xs text-slate-600 divide-y">
               {parent.connectedStudents.length ? parent.connectedStudents.map((student) => <div key={student.id} className="flex justify-between gap-2 p-3"><span><strong className="block text-slate-800">{student.fullName}</strong>{student.nis} • {student.className}</span><button type="button" className="text-red-600" onClick={async () => { if (!window.confirm(`Lepas hubungan dengan ${student.fullName}?`)) return; try { await parentsService.unlinkStudent(parent.id, student.id); await onChanged(); showToast({ type: 'success', message: 'Hubungan siswa dilepas tanpa menghapus data siswa.' }); } catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal melepas siswa.' }); } }}>Lepas</button></div>) : <p className="p-4">Belum ada siswa terhubung.</p>}

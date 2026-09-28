@@ -14,6 +14,7 @@ backend_started=false
 frontend_started=false
 cleanup_done=false
 open_browser=true
+backend_host="127.0.0.1"
 
 ok() { printf '[OK] %s\n' "$*"; }
 warn() { printf '[WARN] %s\n' "$*"; }
@@ -23,8 +24,9 @@ start_msg() { printf '[START] %s\n' "$*"; }
 
 usage() {
   cat <<'EOF'
-Penggunaan: ./start-tandara.sh [--no-browser | --status | --help]
+Penggunaan: ./start-tandara.sh [--lan] [--no-browser | --status | --help]
 
+  --lan         Bind FastAPI ke 0.0.0.0 agar dapat diakses perangkat di LAN.
   --no-browser  Jalankan Tandara tanpa membuka browser.
   --status      Tampilkan status tanpa menjalankan service.
   --help        Tampilkan bantuan ini.
@@ -179,6 +181,7 @@ trap on_signal INT TERM
 mode="start"
 while (($#)); do
   case "$1" in
+    --lan) backend_host="0.0.0.0" ;;
     --no-browser) open_browser=false ;;
     --status) mode="status" ;;
     --help|-h) usage; exit 0 ;;
@@ -234,7 +237,7 @@ else
   start_msg "FastAPI..."
   setsid env PYTHONPATH=backend APP_ENV=development \
     "$SCRIPT_DIR/.venv/bin/python" -m uvicorn app.main:app \
-    --host 127.0.0.1 --port 8000 >>"$LOG_DIR/backend.log" 2>&1 &
+    --host "$backend_host" --port 8000 >>"$LOG_DIR/backend.log" 2>&1 &
   backend_pid=$!
   backend_started=true
 
@@ -317,6 +320,9 @@ $FRONTEND_URL
 
 API:
 $BACKEND_URL
+
+FastAPI bind:
+$backend_host:8000
 
 Logs:
 .logs/backend.log

@@ -28,7 +28,21 @@ def get_parent_student_ids(user: User, db: Session, *, active_only: bool = True)
     )
     if active_only:
         query = query.where(Student.is_active.is_(True))
-    return list(db.scalars(query).all())
+    student_ids = list(db.scalars(query).all())
+    if not student_ids:
+        _error(409, 'Akun orang tua belum terhubung ke siswa aktif.', 'NO_ASSIGNED_STUDENT')
+    if len(student_ids) > 1:
+        _error(409, 'Akun orang tua terhubung ke lebih dari satu siswa.', 'MULTIPLE_STUDENT_CONFIGURATION')
+    return student_ids
+
+
+def get_assigned_parent_student(user: User, db: Session, *, active_only: bool = True) -> Student:
+    """Resolve the product invariant: one parent account has exactly one student."""
+    student_ids = get_parent_student_ids(user, db, active_only=active_only)
+    student = db.get(Student, student_ids[0])
+    if not student:
+        _error(409, 'Siswa yang terhubung tidak ditemukan.', 'NO_ASSIGNED_STUDENT')
+    return student
 
 
 def get_parent_student(user: User, student_id: int, db: Session, *, active_only: bool = True) -> Student:

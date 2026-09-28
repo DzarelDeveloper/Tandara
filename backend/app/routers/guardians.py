@@ -29,7 +29,7 @@ class GuardianUpdate(BaseModel):
 
 
 class GuardianLinks(BaseModel):
-    student_ids: list[int] = Field(min_length=1)
+    student_ids: list[int] = Field(min_length=1, max_length=1)
     relationship: str = Field(default='Wali', min_length=1, max_length=40)
 
 
@@ -67,6 +67,8 @@ def guardian_out(row: Guardian, db: Session):
 
 def validate_students(student_ids: list[int], db: Session) -> list[Student]:
     unique_ids = list(dict.fromkeys(student_ids))
+    if len(unique_ids) > 1:
+        error(422, 'Satu akun orang tua hanya dapat terhubung ke satu siswa.', 'MULTIPLE_STUDENTS_NOT_ALLOWED')
     students = db.scalars(select(Student).where(Student.id.in_(unique_ids))).all() if unique_ids else []
     if len(students) != len(unique_ids): error(422, 'Satu atau lebih siswa tidak ditemukan.', 'STUDENT_NOT_FOUND')
     return students
@@ -142,7 +144,11 @@ def replace_guardian_students(guardian_id: int, body: GuardianLinks, db: Session
 def link_guardian(guardian_id: int, student_ids: list[int], relationship: str = 'Wali', db: Session = Depends(get_db), u=Depends(require('ADMIN_IT'))):
     guardian = db.get(Guardian, guardian_id)
     if not guardian or not guardian.is_active: error(404, 'Wali aktif tidak ditemukan.', 'NOT_FOUND')
-    add_links(guardian, validate_students(student_ids, db), relationship.strip(), db)
+    students = validate_students(student_ids, db)
+    existing = db.scalars(select(GuardianStudent).where(GuardianStudent.guardian_id == guardian.id)).all()
+    if existing and any(link.student_id != students[0].id for link in existing):
+        error(422, 'Satu akun orang tua hanya dapat terhubung ke satu siswa.', 'MULTIPLE_STUDENTS_NOT_ALLOWED')
+    add_links(guardian, students, relationship.strip(), db)
     audit(db, u, 'LINK_STUDENTS', 'Guardian', guardian.id, 'Menautkan siswa ke wali'); db.commit()
     return {'success': True, 'data': guardian_out(guardian, db)}
 

@@ -10,7 +10,7 @@ def create_student(db, classroom, nis, name):
     db.add(student); db.flush(); return student
 
 
-def test_parent_many_to_many_auth_idor_and_admin_management(client, headers, classroom):
+def test_one_parent_one_student_auth_idor_and_admin_management(client, headers, classroom):
     db = SessionLocal()
     first = create_student(db, classroom, 'CHILD-001', 'Anak Pertama')
     second = create_student(db, classroom, 'CHILD-002', 'Anak Kedua')
@@ -20,13 +20,13 @@ def test_parent_many_to_many_auth_idor_and_admin_management(client, headers, cla
 
     payload = {
         'full_name': 'Parent A', 'phone_number': '081234567801', 'relationship': 'Ayah',
-        'username': 'parent-a', 'password': 'ParentA123!', 'student_ids': [first_id, second_id],
+        'username': 'parent-a', 'password': 'ParentA123!', 'student_ids': [first_id],
     }
     assert client.post('/api/guardians', headers=headers['guru'], json=payload).status_code == 403
     created = client.post('/api/guardians', headers=headers['admin'], json=payload)
     assert created.status_code == 200
     parent_id = int(created.json()['data']['id'])
-    assert set(created.json()['data']['studentIds']) == {str(first_id), str(second_id)}
+    assert created.json()['data']['studentIds'] == [str(first_id)]
     generated_username = created.json()['data']['username']
     assert generated_username == 'parenta'
 
@@ -37,12 +37,18 @@ def test_parent_many_to_many_auth_idor_and_admin_management(client, headers, cla
     assert guardian is not None and parent_user.role == 'PARENT'
     assert parent_user.password_hash != payload['password'] and pwd.verify(parent_user.password_hash, payload['password'])
     assert db.query(Student).count() == initial_student_count
-    assert db.query(GuardianStudent).filter_by(guardian_id=parent_id).count() == 2
+    assert db.query(GuardianStudent).filter_by(guardian_id=parent_id).count() == 1
     db.close()
 
     # Re-linking an existing child updates the relationship but never duplicates the junction row.
     assert client.post(f'/api/guardians/{parent_id}/students?relationship=Ayah', headers=headers['admin'], json=[first_id]).status_code == 200
     db = SessionLocal(); assert db.query(GuardianStudent).filter_by(guardian_id=parent_id, student_id=first_id).count() == 1; db.close()
+
+    # Neither create nor link may give one Parent account a second Student.
+    rejected = client.post('/api/guardians', headers=headers['admin'], json={**payload, 'phone_number': '081234567899', 'student_ids': [first_id, second_id]})
+    assert rejected.status_code == 422 and rejected.json()['code'] == 'MULTIPLE_STUDENTS_NOT_ALLOWED'
+    rejected_link = client.post(f'/api/guardians/{parent_id}/students', headers=headers['admin'], json=[third_id])
+    assert rejected_link.status_code == 422 and rejected_link.json()['code'] == 'MULTIPLE_STUDENTS_NOT_ALLOWED'
 
     # A second guardian can safely share the same existing Student.
     second_parent = client.post('/api/guardians', headers=headers['admin'], json={
@@ -63,22 +69,34 @@ def test_parent_many_to_many_auth_idor_and_admin_management(client, headers, cla
     assert login.status_code == 200 and login.json()['data']['user']['role'] == 'PARENT'
     parent_headers = {'Authorization': f"Bearer {login.json()['data']['access_token']}"}
     linked = client.get('/api/parent/students', headers=parent_headers)
-    assert linked.status_code == 200 and {row['id'] for row in linked.json()['data']} == {str(first_id), str(second_id)}
+    assert linked.status_code == 200 and {row['id'] for row in linked.json()['data']} == {str(first_id)}
+    assert client.get('/api/parent/session', headers=parent_headers).json()['data']['student']['id'] == first_id
     assert client.get(f'/api/parent/students/{first_id}', headers=parent_headers).status_code == 200
     assert client.get(f'/api/parent/students/{third_id}', headers=parent_headers).status_code == 404
     assert client.get('/api/parent/profile', headers=parent_headers).json()['data']['id'] == str(parent_id)
     generic_list = client.get('/api/students', headers=parent_headers)
-    assert {row['id'] for row in generic_list.json()['data']} == {str(first_id), str(second_id)}
+    assert {row['id'] for row in generic_list.json()['data']} == {str(first_id)}
     assert client.get(f'/api/students/{third_id}', headers=parent_headers).status_code == 404
+
+    # Legacy/conflicting data is rejected explicitly, never resolved by picking the first row.
+    db = SessionLocal()
+    db.add(GuardianStudent(guardian_id=parent_id, student_id=second_id, relationship='Ayah'))
+    db.commit(); db.close()
+    conflicting = client.get('/api/parent/session', headers=parent_headers)
+    assert conflicting.status_code == 409 and conflicting.json()['code'] == 'MULTIPLE_STUDENT_CONFIGURATION'
+    db = SessionLocal()
+    extra = db.scalar(select(GuardianStudent).where(GuardianStudent.guardian_id == parent_id, GuardianStudent.student_id == second_id))
+    db.delete(extra); db.commit(); db.close()
 
     # Inactive linked students remain in history but disappear from the normal Parent portal.
     assert client.delete(f'/api/students/{first_id}', headers=headers['admin']).status_code == 200
-    assert {row['id'] for row in client.get('/api/parent/students', headers=parent_headers).json()['data']} == {str(second_id)}
+    assert client.get('/api/parent/students', headers=parent_headers).json()['data'] == []
+    assert client.get('/api/parent/session', headers=parent_headers).json()['code'] == 'NO_ASSIGNED_STUDENT'
     assert client.get(f'/api/parent/students/{first_id}', headers=parent_headers).status_code == 404
 
     # Unlink removes only the relationship; Student and its future history remain intact.
-    assert client.delete(f'/api/guardians/{parent_id}/students/{second_id}', headers=headers['admin']).status_code == 200
-    db = SessionLocal(); assert db.get(Student, second_id) is not None; assert db.query(GuardianStudent).filter_by(guardian_id=parent_id, student_id=second_id).count() == 0; db.close()
+    assert client.delete(f'/api/guardians/{parent_id}/students/{first_id}', headers=headers['admin']).status_code == 200
+    db = SessionLocal(); assert db.get(Student, first_id) is not None; assert db.query(GuardianStudent).filter_by(guardian_id=parent_id, student_id=first_id).count() == 0; db.close()
 
 
 def test_parent_username_is_unique_and_credentials_required_together(client, headers, student):

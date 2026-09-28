@@ -9,7 +9,7 @@ from ..database import get_db
 from ..main import Attendance, LeaveRequest, audit, error, localnow, require
 from ..models import GuardianStudent, Notification
 from ..services.notifications import notification_service
-from ..services.parent_access import get_parent_guardian, get_parent_student, get_parent_student_ids
+from ..services.parent_access import get_assigned_parent_student, get_parent_guardian, get_parent_student, get_parent_student_ids
 
 
 router = APIRouter(prefix='/api/parent', tags=['Parent'])
@@ -44,6 +44,20 @@ def attendance_summary(row) -> dict:
         'check_in_method': row.check_in_method if row else None,
         'check_out_method': row.check_out_method if row else None,
     }
+
+
+@router.get('/session')
+def parent_session(db: Session = Depends(get_db), user=Depends(require('PARENT'))):
+    guardian = get_parent_guardian(user, db)
+    student = get_assigned_parent_student(user, db)
+    return {'success': True, 'data': {
+        'parent': {
+            'id': guardian.id, 'full_name': guardian.full_name,
+            'username': user.username, 'role': user.role,
+            'phone_number': guardian.phone_number, 'is_active': user.is_active and guardian.is_active,
+        },
+        'student': student_summary(student),
+    }}
 
 
 @router.get('/dashboard')

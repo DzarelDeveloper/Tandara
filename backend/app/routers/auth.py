@@ -28,12 +28,14 @@ router = APIRouter()
 @router.post('/api/auth/login')
 def login(body: Login, db: Session = Depends(get_db)):
     u = db.scalar(select(User).where(User.username == body.username.strip()))
-    if not u or not u.is_active:
+    if not u:
         error(401, 'Username atau password tidak sesuai.', 'INVALID_CREDENTIALS')
     try:
         pwd.verify(u.password_hash, body.password)
     except VerifyMismatchError:
         error(401, 'Username atau password tidak sesuai.', 'INVALID_CREDENTIALS')
+    if not u.is_active:
+        error(403, 'Akun tidak aktif. Hubungi Admin IT sekolah.', 'ACCOUNT_INACTIVE')
     u.last_login_at = localnow(); audit(db, u, 'LOGIN', 'User', u.id, 'Pengguna login'); db.commit()
     return {'success': True, 'data': {'access_token': token(u), 'token_type': 'bearer', 'user': {'id': str(u.id), 'username': u.username, 'displayName': u.full_name, 'role': u.role, 'isActive': u.is_active}}}
 

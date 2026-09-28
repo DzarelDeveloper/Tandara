@@ -23,7 +23,8 @@ def test_representative_protected_endpoints_require_token(client, method, path):
 def test_auth_login_errors_and_me_security(client, actors, headers):
     assert client.post('/api/auth/login', json={'username': 'missing', 'password': 'anything'}).status_code == 401
     assert client.post('/api/auth/login', json={'username': 'admin-test', 'password': 'wrong'}).status_code == 401
-    assert client.post('/api/auth/login', json={'username': 'inactive-test', 'password': 'password-inactive'}).status_code == 401
+    inactive = client.post('/api/auth/login', json={'username': 'inactive-test', 'password': 'password-inactive'})
+    assert inactive.status_code == 403 and inactive.json()['code'] == 'ACCOUNT_INACTIVE'
     assert client.post('/api/auth/login', json={'username': 'admin-test'}).status_code == 422
     assert client.get('/api/auth/me').status_code == 401
     assert client.get('/api/auth/me', headers={'Authorization': 'Bearer bad'}).status_code == 401
@@ -48,7 +49,8 @@ def test_user_management_and_security(client, actors, headers):
     assert client.post('/api/users', headers=headers['admin'], json=body).json()['code'] == 'USERNAME_EXISTS'
     assert client.post('/api/users', headers=headers['admin'], json={**body, 'username': 'bad-role', 'role': 'BAD'}).status_code == 422
     assert client.patch(f'/api/users/{uid}/status', headers=headers['admin'], params={'active': 'false'}).status_code == 200
-    assert client.post('/api/auth/login', json={'username': 'new-user', 'password': 'password-new'}).status_code == 401
+    inactive = client.post('/api/auth/login', json={'username': 'new-user', 'password': 'password-new'})
+    assert inactive.status_code == 403 and inactive.json()['code'] == 'ACCOUNT_INACTIVE'
     db = SessionLocal(); row = db.get(User, int(uid)); assert row.password_hash != body['password']; assert db.query(AuditLog).filter(AuditLog.action.in_(['CREATE', 'STATUS_CHANGE'])).count() >= 2; db.close()
 
 

@@ -33,7 +33,13 @@ export interface DetectionDiagnostic {
 export const systemService = {
   health: () => apiRequest<HealthStatus>('/api/health'),
   faceEngine: () => apiRequest<FaceEngineHealth>('/api/face-engine/status'),
-  activeSession: () => apiRequest<ActiveSessionHealth | null>('/api/attendance-sessions/active'),
+  activeSession: (params?: { mode?: 'CHECK_IN' | 'CHECK_OUT'; cameraSource?: string }) => {
+    const query = new URLSearchParams();
+    if (params?.mode) query.set('mode', params.mode);
+    if (params?.cameraSource) query.set('camera_source', params.cameraSource);
+    const suffix = query.toString() ? `?${query.toString()}` : '';
+    return apiRequest<ActiveSessionHealth | null>(`/api/attendance-sessions/active${suffix}`);
+  },
   detectFace: (image: Blob, signal?: AbortSignal) => {
     const body = new FormData();
     body.append('image', image, 'diagnostic.jpg');

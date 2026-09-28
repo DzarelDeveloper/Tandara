@@ -7,6 +7,7 @@ import { StartSessionModal } from '../../components/teacher/StartSessionModal';
 import { useToast } from '../../context/ToastContext';
 import { AttendanceEvent } from '../../types';
 import { attendanceService, FaceScanResult } from '../../services/attendance.service';
+import { systemService } from '../../services/system.service';
 import { ApiError, BackendDisconnectedError } from '../../services/api';
 import { CAMERA_STORAGE_KEY, cameraConstraints, enumerateVideoDevices, stopMediaStream } from '../../utils/camera';
 
@@ -214,12 +215,27 @@ export const TeacherLiveAttendancePage: React.FC = () => {
 
   useEffect(() => {
     mountedRef.current = true;
+    void (async () => {
+      try {
+        const active = await systemService.activeSession({ cameraSource: 'BROWSER_CAMERA' });
+        if (!active || !mountedRef.current) return;
+        setSessionId(active.id);
+        setActiveMode(active.mode);
+        setScanState('READY');
+        setScanMessage('Sesi aktif ditemukan. Pemindaian otomatis siap dijalankan.');
+        if (!streamRef.current) {
+          void openCamera(selectedDeviceId || undefined);
+        }
+      } catch {
+        // Ignore bootstrap load failure: the page can still start a fresh session normally.
+      }
+    })();
     return () => {
       mountedRef.current = false;
       clearScanScheduling();
       stopMediaStream(streamRef.current);
     };
-  }, [clearScanScheduling]);
+  }, [clearScanScheduling, openCamera, selectedDeviceId]);
 
   const closeSession = async () => {
     if (!sessionId) return;
