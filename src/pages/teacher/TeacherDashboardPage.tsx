@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertCircle, CheckCircle2, Clock, Video, XCircle, ArrowRight } from 'lucide-react';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { StartSessionModal } from '../../components/teacher/StartSessionModal';
 import { useAuth } from '../../context/AuthContext';
+import { attendanceService } from '../../services/attendance.service';
 import { dashboardService, TeacherDashboardStats } from '../../services/dashboard.service';
 import { StatCard } from '../../components/ui/StatCard';
 
@@ -11,21 +12,43 @@ export const TeacherDashboardPage: React.FC = () => {
   const { session } = useAuth();
   const [showSessionModal, setShowSessionModal] = useState(false);
   const [stats, setStats] = useState<TeacherDashboardStats | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const loadStats = useCallback(() => {
+    setIsLoading(true);
+    dashboardService.teacher().then((next) => { setStats(next); setIsLoading(false); }).catch(() => { setStats(null); setIsLoading(false); });
+  }, []);
+
+  useEffect(() => { loadStats(); }, [loadStats]);
 
   useEffect(() => {
-    dashboardService.teacher().then(setStats).catch(() => setStats(null));
-  }, []);
+    const cleanup = attendanceService.subscribe?.((message: { event: string }) => {
+      if (['ATTENDANCE_SUCCESS', 'ATTENDANCE_CORRECTED', 'SESSION_OPENED', 'SESSION_CLOSED'].includes(message.event)) {
+        void loadStats();
+      }
+    });
+    return typeof cleanup === 'function' ? cleanup : undefined;
+  }, [loadStats]);
 
   const currentDate = new Intl.DateTimeFormat('id-ID', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
   }).format(new Date());
 
-  const kpis = [
-    { label: 'Hadir', value: stats?.presentToday ?? 0, icon: CheckCircle2, color: 'text-emerald-600', helper: 'siswa hari ini' },
-    { label: 'Terlambat', value: stats?.lateToday ?? 0, icon: Clock, color: 'text-amber-600', helper: 'siswa hari ini' },
-    { label: 'Izin / Sakit', value: stats?.excusedToday ?? 0, icon: AlertCircle, color: 'text-blue-600', helper: 'siswa hari ini' },
-    { label: 'Belum Hadir', value: stats?.notPresent ?? 0, icon: XCircle, color: 'text-red-600', helper: 'siswa hari ini' },
+  const placeholders = [
+    { label: 'Hadir', value: 'Memuat…', icon: CheckCircle2, color: 'text-emerald-600', helper: 'siswa hari ini' },
+    { label: 'Terlambat', value: 'Memuat…', icon: Clock, color: 'text-amber-600', helper: 'siswa hari ini' },
+    { label: 'Izin / Sakit', value: 'Memuat…', icon: AlertCircle, color: 'text-blue-600', helper: 'siswa hari ini' },
+    { label: 'Belum Hadir', value: 'Memuat…', icon: XCircle, color: 'text-red-600', helper: 'siswa hari ini' },
   ];
+
+  const kpis = isLoading
+    ? placeholders
+    : [
+        { label: 'Hadir', value: stats?.presentToday ?? 0, icon: CheckCircle2, color: 'text-emerald-600', helper: 'siswa hari ini' },
+        { label: 'Terlambat', value: stats?.lateToday ?? 0, icon: Clock, color: 'text-amber-600', helper: 'siswa hari ini' },
+        { label: 'Izin / Sakit', value: stats?.excusedToday ?? 0, icon: AlertCircle, color: 'text-blue-600', helper: 'siswa hari ini' },
+        { label: 'Belum Hadir', value: stats?.notPresent ?? 0, icon: XCircle, color: 'text-red-600', helper: 'siswa hari ini' },
+      ];
 
   return (
     <div className="space-y-6">

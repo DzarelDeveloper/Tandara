@@ -17,7 +17,7 @@ class ClassIn(BaseModel):
     school_year: str = Field(default='', max_length=20)
     is_active: bool = True
 
-    @field_validator('name', 'grade', 'major', 'school_year')
+    @field_validator('name', 'grade', 'major', 'school_year', mode='before')
     @classmethod
     def trim_text(cls, value: str) -> str:
         return value.strip()
@@ -27,7 +27,7 @@ class MajorIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     is_active: bool = True
 
-    @field_validator('name')
+    @field_validator('name', mode='before')
     @classmethod
     def trim_name(cls, value: str) -> str:
         return value.strip()
@@ -54,10 +54,10 @@ def major_out(row: Major, db: Session) -> dict:
     }
 
 
-def resolve_major(body: ClassIn, db: Session) -> str:
+def resolve_major(body: ClassIn, db: Session, existing_major: str | None = None) -> str:
     if body.major_id is not None:
         major = db.get(Major, body.major_id)
-        if not major or not major.is_active:
+        if not major or (not major.is_active and major.name != existing_major):
             error(422, 'Jurusan aktif tidak ditemukan.', 'MAJOR_NOT_FOUND')
         return major.name
     # Compatibility for existing clients while keeping arbitrary text valid.
@@ -85,7 +85,7 @@ def create_class(body: ClassIn, db: Session = Depends(get_db), u=Depends(require
 def update_class(class_id: int, body: ClassIn, db: Session = Depends(get_db), u=Depends(require('ADMIN_IT'))):
     row = db.get(ClassRoom, class_id)
     if not row: error(404, 'Kelas tidak ditemukan.', 'NOT_FOUND')
-    row.name = body.name; row.grade = body.grade; row.major = resolve_major(body, db)
+    row.name = body.name; row.grade = body.grade; row.major = resolve_major(body, db, existing_major=row.major)
     row.school_year = body.school_year; row.is_active = body.is_active
     try:
         db.flush()

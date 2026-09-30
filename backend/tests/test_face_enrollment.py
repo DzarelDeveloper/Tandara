@@ -7,6 +7,7 @@ from app.config import settings
 from app.services.face_engine import FaceEngineStatus, face_engine
 import app.routers.face_enrollment as face_router
 import app.services.face_recognition as recognition_module
+from app.routers.face_enrollment import _enrollment_user_pose
 from app.database import SessionLocal
 from app.models import AuditLog
 
@@ -38,6 +39,19 @@ def upload_sample(client, headers, student_id):
         headers=headers,
         files={'image': ('capture.jpg', b'not-a-real-image-in-test', 'image/jpeg')},
     )
+
+
+def test_enrollment_pose_direction_is_user_centric_and_unmirrored():
+    user_left = np.zeros(15, dtype=np.float32)
+    user_left[4], user_left[6], user_left[8] = 20, 80, 55
+    user_right = np.zeros(15, dtype=np.float32)
+    user_right[4], user_right[6], user_right[8] = 20, 80, 45
+    front = np.zeros(15, dtype=np.float32)
+    front[4], front[6], front[8] = 20, 80, 50
+
+    assert _enrollment_user_pose(user_left)[0] == 'SLIGHT_LEFT'
+    assert _enrollment_user_pose(user_right)[0] == 'SLIGHT_RIGHT'
+    assert _enrollment_user_pose(front) == ('FRONT', 0.5)
 
 
 def test_face_engine_status_is_admin_only(client, headers):

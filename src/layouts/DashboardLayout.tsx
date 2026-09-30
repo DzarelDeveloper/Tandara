@@ -33,6 +33,7 @@ export const DashboardLayout: React.FC = () => {
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [auditLoading, setAuditLoading] = useState(false);
+  const [auditRefresh, setAuditRefresh] = useState(0);
   const [auditError, setAuditError] = useState('');
 
   useEffect(() => {
@@ -53,10 +54,10 @@ export const DashboardLayout: React.FC = () => {
     setAuditLoading(true);
     setAuditError('');
     reportsService.getAuditLogs().then(setAuditLogs).catch((error: unknown) => setAuditError(error instanceof Error ? error.message : 'Gagal memuat audit log.')).finally(() => setAuditLoading(false));
-  }, [showAuditModal]);
+  }, [showAuditModal, auditRefresh]);
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    try { await logout(); } catch { /* Local credentials are cleared even when the server is unavailable. */ }
     showToast({
       type: 'info',
       title: 'Sesi Berakhir',
@@ -144,6 +145,7 @@ export const DashboardLayout: React.FC = () => {
           maxWidth="2xl"
         >
           <div className="space-y-4">
+            <button type="button" disabled={auditLoading} onClick={() => setAuditRefresh((value) => value + 1)} className="text-sm text-blue-700">Muat Ulang</button>
             {auditLoading && <p className="text-sm text-slate-500">Memuat audit log...</p>}
             {auditError && <p className="text-sm text-red-700">{auditError}</p>}
             {!auditLoading && !auditError && auditLogs.length === 0 && <EmptyState icon={ShieldCheck} title="Belum ada catatan audit" description="Belum ada event audit dari backend." />}

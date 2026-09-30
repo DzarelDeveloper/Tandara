@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { BookOpen, Plus, School, UserPlus, Users } from 'lucide-react';
+import { ErrorState } from '../../components/ui/ErrorState';
+import { LoadingSkeleton } from '../../components/ui/LoadingSkeleton';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { ClassFormModal } from '../../components/admin/ClassFormModal';
@@ -22,10 +24,19 @@ export const AdminClassesUsersPage: React.FC = () => {
   const [editingClass, setEditingClass] = useState<Class | null>(null);
   const [editingMajor, setEditingMajor] = useState<Major | null>(null);
 
+  const [loading, setLoading] = useState({ classes: true, majors: true, users: true });
+  const [errors, setErrors] = useState({ classes: '', majors: '', users: '' });
   const reportError = useCallback((error: unknown, fallback: string) => showToast({ type: 'error', message: error instanceof Error ? error.message : fallback }), [showToast]);
-  const loadClasses = useCallback(async () => { try { setClasses(await classesService.getClasses()); } catch (error) { reportError(error, 'Gagal memuat kelas.'); } }, [reportError]);
-  const loadMajors = useCallback(async () => { try { setMajors(await classesService.getMajors()); } catch (error) { reportError(error, 'Gagal memuat jurusan.'); } }, [reportError]);
-  const loadUsers = useCallback(async () => { try { setUsers(await usersService.getUsers()); } catch (error) { reportError(error, 'Gagal memuat pengguna.'); } }, [reportError]);
+  const loadTable = useCallback(async <T,>(key: 'classes' | 'majors' | 'users', fetchRows: () => Promise<T[]>, apply: (rows: T[]) => void) => {
+    setLoading((state) => ({ ...state, [key]: true }));
+    setErrors((state) => ({ ...state, [key]: '' }));
+    try { apply(await fetchRows()); }
+    catch (error) { setErrors((state) => ({ ...state, [key]: error instanceof Error ? error.message : 'Gagal memuat data.' })); }
+    finally { setLoading((state) => ({ ...state, [key]: false })); }
+  }, []);
+  const loadClasses = useCallback(() => loadTable('classes', classesService.getClasses, setClasses), [loadTable]);
+  const loadMajors = useCallback(() => loadTable('majors', classesService.getMajors, setMajors), [loadTable]);
+  const loadUsers = useCallback(() => loadTable('users', usersService.getUsers, setUsers), [loadTable]);
   useEffect(() => { void loadClasses(); void loadMajors(); void loadUsers(); }, [loadClasses, loadMajors, loadUsers]);
 
   const removeClass = async (item: Class) => {
@@ -67,9 +78,10 @@ export const AdminClassesUsersPage: React.FC = () => {
   return <div className="space-y-6">
     <PageHeader title="Kelas & Pengguna" subtitle="Kelola master kelas, jurusan, dan akun operasional" breadcrumbs={[{ label: 'Admin IT', href: '/admin/dashboard' }, { label: 'Kelas & Pengguna' }]} />
     <div className="flex gap-2 border-b border-slate-200">{tabs.map(({ id, label, icon: Icon }) => <button key={id} type="button" onClick={() => setActiveTab(id)} className={`flex items-center gap-2 px-4 py-2.5 text-sm font-semibold border-b-2 ${activeTab === id ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'}`}><Icon className="w-4 h-4" />{label}</button>)}</div>
-    {activeTab === 'classes' && <section className="space-y-4"><div className="flex justify-between"><p className="text-sm text-slate-500">{classes.length} kelas</p><button onClick={() => { setEditingClass(null); setShowClassModal(true); }} className="inline-flex items-center gap-2 px-3.5 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg"><Plus className="w-4 h-4" /> Tambah Kelas</button></div><DataTable columns={classColumns} data={classes} emptyTitle="Belum ada kelas." emptyDescription="Tambahkan kelas pertama untuk mulai mendaftarkan siswa." emptyActionText="Tambah Kelas" onEmptyAction={() => setShowClassModal(true)} /></section>}
-    {activeTab === 'majors' && <section className="space-y-4"><div className="flex justify-between"><p className="text-sm text-slate-500">Jurusan bersifat opsional untuk kelas.</p><button onClick={() => { setEditingMajor(null); setShowMajorModal(true); }} className="inline-flex items-center gap-2 px-3.5 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg"><Plus className="w-4 h-4" /> Tambah Jurusan</button></div><DataTable columns={majorColumns} data={majors} emptyTitle="Belum ada jurusan." emptyDescription="Sekolah tanpa jurusan tetap dapat membuat kelas." emptyActionText="Tambah Jurusan" onEmptyAction={() => setShowMajorModal(true)} /></section>}
-    {activeTab === 'users' && <section className="space-y-4"><div className="flex justify-end"><button onClick={() => setShowUserModal(true)} className="inline-flex items-center gap-2 px-3.5 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg"><UserPlus className="w-4 h-4" /> Tambah Pengguna</button></div><DataTable columns={userColumns} data={users} emptyTitle="Belum ada pengguna." emptyDescription="Tambahkan akun operasional." /></section>}
+    <button type="button" disabled={loading[activeTab]} onClick={() => void ({ classes: loadClasses, majors: loadMajors, users: loadUsers }[activeTab])()} className="text-sm text-blue-700">Muat Ulang</button>
+    {activeTab === 'classes' && <section className="space-y-4"><div className="flex justify-between"><p className="text-sm text-slate-500">{classes.length} kelas</p><button onClick={() => { setEditingClass(null); setShowClassModal(true); }} className="inline-flex items-center gap-2 px-3.5 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg"><Plus className="w-4 h-4" /> Tambah Kelas</button></div>{errors.classes ? <ErrorState message={errors.classes} onRetry={loadClasses} /> : loading.classes ? <LoadingSkeleton type="table" /> : <DataTable columns={classColumns} data={classes} emptyTitle="Belum ada kelas." emptyDescription="Tambahkan kelas pertama untuk mulai mendaftarkan siswa." emptyActionText="Tambah Kelas" onEmptyAction={() => { setEditingClass(null); setShowClassModal(true); }} />}</section>}
+    {activeTab === 'majors' && <section className="space-y-4"><div className="flex justify-between"><p className="text-sm text-slate-500">Jurusan bersifat opsional untuk kelas.</p><button onClick={() => { setEditingMajor(null); setShowMajorModal(true); }} className="inline-flex items-center gap-2 px-3.5 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg"><Plus className="w-4 h-4" /> Tambah Jurusan</button></div>{errors.majors ? <ErrorState message={errors.majors} onRetry={loadMajors} /> : loading.majors ? <LoadingSkeleton type="table" /> : <DataTable columns={majorColumns} data={majors} emptyTitle="Belum ada jurusan." emptyDescription="Sekolah tanpa jurusan tetap dapat membuat kelas." emptyActionText="Tambah Jurusan" onEmptyAction={() => { setEditingMajor(null); setShowMajorModal(true); }} />}</section>}
+    {activeTab === 'users' && <section className="space-y-4"><div className="flex justify-end"><button onClick={() => setShowUserModal(true)} className="inline-flex items-center gap-2 px-3.5 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg"><UserPlus className="w-4 h-4" /> Tambah Pengguna</button></div>{errors.users ? <ErrorState message={errors.users} onRetry={loadUsers} /> : loading.users ? <LoadingSkeleton type="table" /> : <DataTable columns={userColumns} data={users} emptyTitle="Belum ada pengguna." emptyDescription="Tambahkan akun operasional." />}</section>}
     <ClassFormModal isOpen={showClassModal} classroom={editingClass} majors={majors} onClose={() => { setShowClassModal(false); setEditingClass(null); }} onSaved={async () => { await Promise.all([loadClasses(), loadMajors()]); }} />
     <MajorFormModal isOpen={showMajorModal} major={editingMajor} onClose={() => { setShowMajorModal(false); setEditingMajor(null); }} onSaved={async () => { await Promise.all([loadMajors(), loadClasses()]); }} />
     <UserFormModal isOpen={showUserModal} onClose={() => setShowUserModal(false)} onCreated={loadUsers} />

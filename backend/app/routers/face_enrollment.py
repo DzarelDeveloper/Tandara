@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 from uuid import uuid4
 from pathlib import Path
 
 import numpy as np
 from fastapi import APIRouter, Depends, UploadFile
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -33,6 +34,11 @@ def _student_or_error(student_id: int, db: Session) -> Student:
     if not student.is_active:
         error(422, 'Siswa tidak aktif.', 'STUDENT_INACTIVE')
     return student
+
+
+def _lock_student_files(student_id: int, db: Session) -> None:
+    # Serialize enrollment file mutations with permanent deletion across workers.
+    db.execute(update(Student).where(Student.id == student_id).values(is_active=Student.is_active))
 
 
 def _engine_or_error() -> None:
@@ -70,6 +76,32 @@ def _save_embedding(path: Path, embedding: np.ndarray) -> None:
         np.save(output, embedding.astype(np.float32), allow_pickle=False)
 
 
+def _enrollment_user_pose(face: np.ndarray) -> tuple[str, float]:
+    """Convert raw, unmirrored YuNet landmarks to user-centric head-turn direction.
+
+    YuNet's image-right eye is the subject's anatomical right eye. A turn to the
+    subject's left makes the nose closer to the image-right eye; lower ratios
+    therefore canonically mean user-left, regardless of the mirrored preview.
+    """
+    if len(face) < 10:
+        return 'FRONT', 0.5
+    right_eye_x = float(face[4])
+    left_eye_x = float(face[6])
+    nose_x = float(face[8])
+    right_distance = abs(nose_x - right_eye_x)
+    left_distance = abs(left_eye_x - nose_x)
+    total = right_distance + left_distance
+    if total <= 1e-6:
+        return 'FRONT', 0.5
+    signed_user_left = (right_distance - left_distance) / total
+    yaw_ratio = min(1.0, max(0.0, 0.5 - signed_user_left * 0.5))
+    if yaw_ratio < 0.44:
+        return 'SLIGHT_LEFT', yaw_ratio
+    if yaw_ratio > 0.56:
+        return 'SLIGHT_RIGHT', yaw_ratio
+    return 'FRONT', yaw_ratio
+
+
 @router.get('/api/face-engine/status')
 def face_engine_status(u=Depends(require('ADMIN_IT'))):
     return {'success': True, 'data': face_engine.status_payload()}
@@ -94,7 +126,91 @@ async def face_engine_detect(image: UploadFile, u=Depends(require('ADMIN_IT'))):
         for face in faces
     ]
     quality = 'NO_FACE' if not faces else ('MULTIPLE_FACES' if len(faces) > 1 else (face_engine.validate_face_quality(frame, faces[0]) or 'OK'))
-    return {'success': True, 'data': {'faceCount': len(faces), 'quality': quality, 'faceBoxes': boxes}}
+    response: dict[str, Any] = {'faceCount': len(faces), 'quality': quality, 'faceBoxes': boxes}
+    if len(faces) == 1:
+        assessment = face_engine.evaluate_quality(frame, faces[0], for_enrollment=False)
+        response['assessment'] = {
+            'status': assessment.status,
+            'isAcceptable': assessment.is_acceptable,
+            'errorCode': assessment.error_code,
+            'sharpness': round(assessment.sharpness, 2),
+            'brightness': round(assessment.brightness, 2),
+            'yawRatio': round(assessment.yaw_ratio, 3),
+            'rollDegrees': round(assessment.roll_degrees, 2),
+            'eyeDistanceRatio': round(assessment.eye_distance_ratio, 3),
+            'detectionConfidence': round(assessment.detection_confidence, 4),
+            'bboxSizePx': {'width': round(assessment.bbox[2], 1), 'height': round(assessment.bbox[3], 1)},
+            'frameSizePx': {'width': assessment.frame_size[0], 'height': assessment.frame_size[1]},
+            'details': assessment.details,
+        }
+    return {'success': True, 'data': response}
+
+
+@router.post('/api/face-engine/enrollment-preview')
+async def face_engine_enrollment_preview(image: UploadFile, u=Depends(require('ADMIN_IT'))):
+    """Enrollment camera preview: detection + enrollment-grade quality + pose information only.
+
+    Position / size validation is done on the FRONTEND because the frontend is the
+    single source of truth for guide geometry: it knows actual video viewport dimensions,
+    object-fit cropping, mirroring, and responsive layout. This endpoint returns the
+    raw detected face coordinates, enrollment-quality assessment, and pose classification.
+    Never persists biometric data.
+    """
+    _engine_or_error()
+    if image.content_type and not image.content_type.startswith('image/'):
+        error(422, 'File harus berupa gambar.', 'INVALID_IMAGE')
+    frame = _decode_image(await image.read())
+    faces = face_engine.detect_faces(frame)
+    height, width = frame.shape[:2]
+    data: dict[str, Any] = {
+        'faceCount': len(faces),
+        'frameSizePx': {'width': width, 'height': height},
+        'minEnrollmentFaceSizePx': settings.face_enrollment_min_size_px,
+        'minScanFaceSizePx': settings.face_min_size_px,
+    }
+    if len(faces) == 0:
+        data['quality'] = 'NO_FACE'
+        return {'success': True, 'data': data}
+    if len(faces) > 1:
+        data['quality'] = 'MULTIPLE_FACES'
+        data['faceBoxes'] = [
+            {
+                'x': max(0.0, float(f[0]) / width),
+                'y': max(0.0, float(f[1]) / height),
+                'width': min(1.0, float(f[2]) / width),
+                'height': min(1.0, float(f[3]) / height),
+            }
+            for f in faces
+        ]
+        return {'success': True, 'data': data}
+    face = faces[0]
+    assessment = face_engine.evaluate_quality(frame, face, for_enrollment=True)
+    bbox_rel = {
+        'x': max(0.0, float(face[0]) / width),
+        'y': max(0.0, float(face[1]) / height),
+        'width': min(1.0, float(face[2]) / width),
+        'height': min(1.0, float(face[3]) / height),
+    }
+    data['faceBox'] = bbox_rel
+    data['bboxSizePx'] = {'width': round(float(face[2]), 1), 'height': round(float(face[3]), 1)}
+    data['assessment'] = {
+        'status': assessment.status,
+        'isAcceptable': assessment.is_acceptable,
+        'errorCode': assessment.error_code,
+        'sharpness': round(assessment.sharpness, 2),
+        'brightness': round(assessment.brightness, 2),
+        'yawRatio': round(assessment.yaw_ratio, 3),
+        'rollDegrees': round(assessment.roll_degrees, 2),
+        'eyeDistanceRatio': round(assessment.eye_distance_ratio, 3),
+        'detectionConfidence': round(assessment.detection_confidence, 4),
+    }
+    pose_label, pose_yaw_ratio = _enrollment_user_pose(face)
+    data['pose'] = {
+        'label': pose_label,
+        'yawRatio': round(pose_yaw_ratio, 3),
+        'rollDegrees': round(assessment.roll_degrees, 2),
+    }
+    return {'success': True, 'data': data}
 
 
 @router.get('/api/students/{student_id}/face-enrollment')
@@ -106,6 +222,7 @@ def enrollment_status(student_id: int, db: Session = Depends(get_db), u=Depends(
 
 @router.post('/api/students/{student_id}/face-enrollment/samples')
 async def add_sample(student_id: int, image: UploadFile, db: Session = Depends(get_db), u=Depends(require('ADMIN_IT'))):
+    _lock_student_files(student_id, db)
     student = _student_or_error(student_id, db)
     _engine_or_error()
     if image.content_type and not image.content_type.startswith('image/'):
@@ -146,6 +263,7 @@ async def add_sample(student_id: int, image: UploadFile, db: Session = Depends(g
 
 @router.post('/api/students/{student_id}/face-enrollment/complete')
 def complete_enrollment(student_id: int, db: Session = Depends(get_db), u=Depends(require('ADMIN_IT'))):
+    _lock_student_files(student_id, db)
     student = _student_or_error(student_id, db)
     sample_paths = _sample_files(student_id)
     if len(sample_paths) < settings.face_min_samples:
@@ -181,6 +299,7 @@ def complete_enrollment(student_id: int, db: Session = Depends(get_db), u=Depend
 
 @router.delete('/api/students/{student_id}/face-enrollment/samples')
 def discard_samples(student_id: int, db: Session = Depends(get_db), u=Depends(require('ADMIN_IT'))):
+    _lock_student_files(student_id, db)
     _student_or_error(student_id, db)
     pending = PENDING_ROOT / str(student_id)
     for path in pending.glob('sample-*.npy'):
@@ -192,18 +311,16 @@ def discard_samples(student_id: int, db: Session = Depends(get_db), u=Depends(re
 
 @router.delete('/api/students/{student_id}/face-enrollment')
 def delete_enrollment(student_id: int, db: Session = Depends(get_db), u=Depends(require('ADMIN_IT'))):
+    _lock_student_files(student_id, db)
     student = _student_or_error(student_id, db)
     enrollment = db.scalar(select(FaceEnrollment).where(FaceEnrollment.student_id == student_id))
     if not enrollment:
         error(404, 'Enrollment wajah tidak ditemukan.', 'FACE_ENROLLMENT_NOT_FOUND')
-    final_dir = FACE_ROOT / str(student_id)
-    for path in final_dir.glob('*'):
-        if path.is_file(): path.unlink()
-    try: final_dir.rmdir()
-    except OSError: pass
-    db.delete(enrollment)
-    student.face_enrollment_status = 'NOT_REGISTERED'
-    audit(db, u, 'FACE_ENROLLMENT_DELETED', 'FaceEnrollment', student_id, 'Menghapus enrollment wajah')
-    db.commit()
+    from ..services.biometric_cleanup import staged_biometric_cleanup
+    with staged_biometric_cleanup(db, student_id, FACE_ROOT, PENDING_ROOT) as cleanup:
+        db.delete(enrollment)
+        student.face_enrollment_status = 'NOT_REGISTERED'
+        audit(db, u, 'FACE_ENROLLMENT_DELETED', 'FaceEnrollment', student_id, 'Menghapus enrollment wajah')
+        db.commit()
     face_recognition_service.invalidate(student_id)
-    return {'success': True, 'data': {'studentId': str(student.id), 'status': student.face_enrollment_status}}
+    return {'success': True, 'data': {'studentId': str(student.id), 'status': student.face_enrollment_status, **cleanup}}

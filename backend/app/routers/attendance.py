@@ -95,7 +95,10 @@ async def publish_parent_notifications(rows):
 async def manual(body:ManualIn,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
  a=take(db,body.student_id,body.mode,'MANUAL',u,notes=body.reason);notifications=notification_service.attendance_transition(db,a,body.mode);audit(db,u,'MANUAL_ATTENDANCE','Attendance',a.id,body.reason);db.commit();await publish_parent_notifications(notifications);await broadcast('ATTENDANCE_SUCCESS',{'attendance_id':a.id,'recorded_at':localnow().isoformat(),'status':a.status,'student_id':a.student_id,'student_name':a.student.full_name,'nis':a.student.nis,'class_name':a.student.classroom.name,'mode':body.mode,'confidence':None});return {'success':True,'data':attendance_out(a)}
 @router.post('/api/attendance/scan')
-async def scan(session_id: int = Form(...), image: UploadFile = File(...), db: Session = Depends(get_db), u=Depends(require('ADMIN_IT', 'GURU_PIKET'))):
+async def scan(session_id: int = Form(...), image: UploadFile = File(...), benchmark: bool = Form(False), db: Session = Depends(get_db), u=Depends(require('ADMIN_IT', 'GURU_PIKET'))):
+  scan_started = time.perf_counter()
+  if benchmark and settings.app_env == 'production':
+    fail(403, 'Benchmark mode is available only in development.', 'BENCHMARK_NOT_ALLOWED')
   session = db.get(AttendanceSession, session_id)
   if not session or session.status != 'ACTIVE' or session.session_date.date() != localnow().date():
     fail(422, 'Sesi absensi tidak aktif.', 'SESSION_NOT_ACTIVE')
@@ -110,6 +113,9 @@ async def scan(session_id: int = Form(...), image: UploadFile = File(...), db: S
   results = face_recognition_service.recognize_image_many(content, db, session_id=session.id)
   if len(results) == 1 and (results[0].status != 'RECOGNIZED' or results[0].student_id is None):
     result = results[0]
+    result.telemetry.setdefault('timings_ms', {}).update({'attendance_write': 0.0, 'realtime_publish': 0.0})
+    result.telemetry['backend_total_ms'] = (time.perf_counter() - scan_started) * 1000
+    result.telemetry['timings_ms']['backend_total'] = result.telemetry['backend_total_ms']
     logger.info('Face scan rejected status=%s total_ms=%.2f', result.status, result.timings_ms.get('total', 0.0))
     messages = {
       'UNKNOWN_FACE': 'Wajah tidak dikenali.',
@@ -158,6 +164,7 @@ async def scan(session_id: int = Form(...), image: UploadFile = File(...), db: S
   legacy_result = None
 
   for result in results:
+    result.telemetry.setdefault('timings_ms', {}).update({'attendance_write': 0.0, 'realtime_publish': 0.0})
     face_payload = {
       'trackId': result.track_id,
       'status': result.status,
@@ -219,8 +226,20 @@ async def scan(session_id: int = Form(...), image: UploadFile = File(...), db: S
       faces_payload.append(face_payload)
       continue
 
+    if benchmark:
+      face_payload.update({
+        'status': 'BENCHMARK_READY',
+        'benchmarkReady': True,
+        'attendanceStatus': 'NOT_RECORDED',
+        'message': 'Identity and liveness gates passed; attendance was not saved.',
+      })
+      faces_payload.append(face_payload)
+      continue
+
+    attendance_write_started = time.perf_counter()
     student = db.get(Student, result.student_id)
     if not student or not student.is_active:
+      result.telemetry['timings_ms']['attendance_write'] = (time.perf_counter() - attendance_write_started) * 1000
       face_payload.update({'status': 'STUDENT_INACTIVE', 'attendanceStatus': 'NOT_RECORDED'})
       faces_payload.append(face_payload)
       continue
@@ -266,6 +285,7 @@ async def scan(session_id: int = Form(...), image: UploadFile = File(...), db: S
         face_recognition_service.mark_attendance_attempted(session.id, result.track_id)
         if track and track.state == 'ATTENDED':
           face_payload.update({'trackState': 'ATTENDED', 'state': 'ATTENDED'})
+    result.telemetry['timings_ms']['attendance_write'] = (time.perf_counter() - attendance_write_started) * 1000
 
     if duplicate:
       face_payload.update({'status': 'DUPLICATE_SCAN', 'attendanceStatus': 'ALREADY_RECORDED'})
@@ -307,21 +327,30 @@ async def scan(session_id: int = Form(...), image: UploadFile = File(...), db: S
       'recorded_at': data['recordedAt'],
       'status': attendance_record.status,
     }
+    realtime_started = time.perf_counter()
     try:
       await broadcast('ATTENDANCE_SUCCESS', event)
     except Exception:
       logger.exception('Attendance committed but scan broadcast failed for student_id=%s', attendance_record.student_id)
     await publish_parent_notifications(notifications)
+    result.telemetry['timings_ms']['realtime_publish'] = (time.perf_counter() - realtime_started) * 1000
 
   if legacy_result is not None:
     response_data = {**legacy_result, 'faces': faces_payload, 'attendances': attendance_records}
   else:
     response_data = {'faces': faces_payload, 'attendances': attendance_records}
   response_data['livenessMode'] = 'PASSIVE' if settings.face_liveness_enabled else 'MANUAL_ONLY'
+  response_data['benchmarkMode'] = benchmark
+  backend_total_ms = (time.perf_counter() - scan_started) * 1000
+  for result in results:
+    result.telemetry['backend_total_ms'] = backend_total_ms
+    result.telemetry.setdefault('timings_ms', {})['backend_total'] = backend_total_ms
   return {'success': True, 'data': response_data}
 @router.get('/api/attendance')
-def attendance(today:bool=False,date_from:date|None=None,date_to:date|None=None,status:str|None=None,db:Session=Depends(get_db),u=Depends(user_dep)):
- q=select(Attendance).order_by(Attendance.attendance_date.desc())
+def attendance(today:bool=False,date_from:date|None=None,date_to:date|None=None,status:str|None=None,class_id:int|None=None,student_id:int|None=None,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
+ q=select(Attendance).join(Student).order_by(Attendance.attendance_date.desc())
+ if class_id:q=q.where(Student.class_id==class_id)
+ if student_id:q=q.where(Attendance.student_id==student_id)
  if today:q=q.where(Attendance.attendance_date==localnow().date())
  if date_from:q=q.where(Attendance.attendance_date>=date_from)
  if date_to:q=q.where(Attendance.attendance_date<=date_to)

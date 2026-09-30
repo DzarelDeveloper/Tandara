@@ -18,6 +18,18 @@ class FaceObservation:
     ambiguity_margin: float | None = None
 
 
+OBSERVATION_BUFFER_HARD_LIMIT = 24
+OBSERVATION_BUFFER_TARGET_SIZE = 12
+LIVENESS_BUFFER_LIMIT = 24
+
+
+def _rank_observation_key(obs: FaceObservation) -> tuple:
+    quality_rank = 2 if obs.quality == 'GOOD' else 1 if obs.quality == 'ACCEPTABLE' else 0
+    similarity_rank = obs.similarity if obs.similarity is not None else -1.0
+    ambiguity_rank = obs.ambiguity_margin if obs.ambiguity_margin is not None else -1.0
+    return (quality_rank, similarity_rank, ambiguity_rank, obs.sharpness)
+
+
 @dataclass
 class FaceTrack:
     track_id: int
@@ -29,9 +41,10 @@ class FaceTrack:
     cache_expires_at: float = 0.0
     attendance_attempted: bool = False
     state: str = 'TRACKING'
-    observations: deque[FaceObservation] = field(default_factory=lambda: deque(maxlen=32))
+    observations: deque[FaceObservation] = field(default_factory=lambda: deque(maxlen=OBSERVATION_BUFFER_HARD_LIMIT))
     verified_student_id: int | None = None
     evidence_count: int = 0
+    consecutive_temporal_misses: int = 0
     attended_student_ids: set[int] = field(default_factory=set)
     attendance_retry_at: float = 0.0
     first_seen: float | None = None
@@ -39,19 +52,36 @@ class FaceTrack:
     verified_until: float = 0.0
     verification_path: str = 'STANDARD'
     liveness_state: str = 'LIVENESS_PENDING'
-    liveness_samples: deque = field(default_factory=lambda: deque(maxlen=32))
+    liveness_samples: deque = field(default_factory=lambda: deque(maxlen=LIVENESS_BUFFER_LIMIT))
     liveness_signals: dict = field(default_factory=dict)
 
-    def break_continuity(self, *, clear_evidence: bool = False) -> None:
+    def compact_observations(self, *, now: float, window: float, target_size: int = OBSERVATION_BUFFER_TARGET_SIZE) -> None:
+        while self.observations and now - self.observations[0].timestamp > window:
+            self.observations.popleft()
+        if len(self.observations) <= target_size:
+            return
+        ranked = sorted(self.observations, key=_rank_observation_key, reverse=True)
+        keep_ids = {id(obs) for obs in ranked[:target_size]}
+        preserved: list[FaceObservation] = []
+        for obs in self.observations:
+            if id(obs) in keep_ids:
+                preserved.append(obs)
+        self.observations.clear()
+        for obs in preserved:
+            self.observations.append(obs)
+
+    def break_continuity(self, *, clear_evidence: bool = False, clear_liveness: bool = True) -> None:
         self.cache_expires_at = 0.0
         self.verified_until = 0.0
         self.verified_student_id = None
         self.state = 'VERIFYING' if self.observations else 'TRACKING'
-        self.liveness_state = 'LIVENESS_PENDING'
-        self.liveness_samples.clear()
+        if clear_liveness:
+            self.liveness_state = 'LIVENESS_PENDING'
+            self.liveness_samples.clear()
         if clear_evidence:
             self.observations.clear()
             self.evidence_count = 0
+            self.consecutive_temporal_misses = 0
 
 
 class LightweightFaceTracker:
@@ -103,11 +133,11 @@ class LightweightFaceTracker:
                 used_tracks.add(track_id)
 
         result: list[FaceTrack] = []
-        # Keep the track ID through brief occlusion, but require fresh recognition
+        # Keep the track ID through brief occlusion, but drop cached identity/verification
         # when it returns so an entrant cannot inherit a missing face's identity.
         for track_id, track in self._tracks.items():
             if track_id not in used_tracks:
-                track.break_continuity()
+                track.break_continuity(clear_evidence=False, clear_liveness=False)
         for detection_index, box in enumerate(boxes):
             track_id = matches.get(detection_index)
             if track_id is None:
@@ -117,13 +147,28 @@ class LightweightFaceTracker:
                 self._tracks[track_id] = track
             else:
                 track = self._tracks[track_id]
-                uncertain = any(abs(score - match_scores[detection_index]) < 0.1
+                iou = self._iou(track.box, box)
+                bw, bh = max(box[2], 0.01), max(box[3], 0.01)
+                distance = self._center_distance(track.box, box)
+                normalized_distance = distance / max(math.hypot(bw, bh), 0.035)
+                uncertain = any(abs(score - match_scores[detection_index]) < 0.08
                                 and ((di == detection_index and ti != track_id) or (ti == track_id and di != detection_index))
                                 for score, di, ti in candidates)
                 if uncertain:
+                    track.break_continuity(clear_evidence=False)
+                elif iou < 0.08 and normalized_distance > 0.75:
+                    # Large jump + no overlap: treat as a new entrant with the same slot.
+                    # Evidence from an unrelated previously-tracked person must not leak.
                     track.break_continuity(clear_evidence=True)
-                elif self._iou(track.box, box) < 0.2:
-                    track.break_continuity(clear_evidence=track.verified_until > 0)
+                elif iou < 0.18 and track.verified_until <= 0:
+                    # Low overlap while unverified is fine for walk-through; keep evidence.
+                    # Just drop the short-term recognition cache so re-identification runs.
+                    track.break_continuity(clear_evidence=False, clear_liveness=False)
+                elif iou < 0.18 and track.verified_until > 0 and normalized_distance > 0.45:
+                    # Previously verified but the box drifted enough to be suspicious.
+                    # Clear the verified identity but preserve observations for re-verification
+                    # from the collected best frames (walk-through safety).
+                    track.break_continuity(clear_evidence=False)
                 track.box = box
                 track.last_seen = now
             result.append(track)

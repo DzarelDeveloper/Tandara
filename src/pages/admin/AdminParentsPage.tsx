@@ -5,6 +5,8 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { UserPlus, HeartHandshake, ShieldCheck, Bell, Users } from 'lucide-react';
+import { ErrorState } from '../../components/ui/ErrorState';
+import { LoadingSkeleton } from '../../components/ui/LoadingSkeleton';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { FilterBar } from '../../components/ui/FilterBar';
 import { DataTable, Column } from '../../components/ui/DataTable';
@@ -21,22 +23,23 @@ export const AdminParentsPage: React.FC = () => {
   const [showParentModal, setShowParentModal] = useState(false);
   const [selectedParent, setSelectedParent] = useState<Parent | null>(null);
   const [parents, setParents] = useState<Parent[]>([]);
+  const [loadError, setLoadError] = useState('');
   const [loading, setLoading] = useState(true);
   const { showToast } = useToast();
 
   const loadParents = async () => {
-    setLoading(true);
+    setLoading(true); setLoadError('');
     try { const rows = await parentsService.getParents(); setParents(rows); setSelectedParent((current) => current ? rows.find((item) => item.id === current.id) ?? null : null); }
-    catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal memuat data wali.' }); }
+    catch (error) { setLoadError(error instanceof Error ? error.message : 'Gagal memuat data wali.'); }
     finally { setLoading(false); }
   };
   useEffect(() => { void loadParents(); }, []);
 
   const kpis = [
-    { label: 'Total Akun', value: String(parents.length), icon: Users, color: 'text-blue-600' },
-    { label: 'Aktif', value: String(parents.filter((item) => item.accountStatus === 'ACTIVE').length), icon: ShieldCheck, color: 'text-emerald-600' },
-    { label: 'Nonaktif', value: String(parents.filter((item) => item.accountStatus === 'INACTIVE').length), icon: HeartHandshake, color: 'text-amber-600' },
-    { label: 'Siswa Terhubung', value: String(parents.reduce((total, item) => total + item.connectedStudentIds.length, 0)), icon: Bell, color: 'text-teal-600' },
+    { label: 'Total Akun', value: String(parents.filter((item) => item.username).length), icon: Users, color: 'text-blue-600' },
+    { label: 'Aktif', value: String(parents.filter((item) => item.username && item.accountStatus === 'ACTIVE').length), icon: ShieldCheck, color: 'text-emerald-600' },
+    { label: 'Nonaktif', value: String(parents.filter((item) => item.username && item.accountStatus === 'INACTIVE').length), icon: HeartHandshake, color: 'text-amber-600' },
+    { label: 'Siswa Terhubung', value: String(new Set(parents.flatMap((item) => item.connectedStudentIds)).size), icon: Bell, color: 'text-teal-600' },
   ];
 
   const columns: Column<Parent>[] = [
@@ -76,7 +79,7 @@ export const AdminParentsPage: React.FC = () => {
       header: 'Status Akun',
       render: (item) => (
         <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-700 border border-slate-200">
-          {item.accountStatus}
+          {item.username ? item.accountStatus : 'Tanpa akun login'}
         </span>
       ),
     },
@@ -163,7 +166,7 @@ export const AdminParentsPage: React.FC = () => {
                 <p className="text-xs font-medium text-slate-500 uppercase tracking-wider">
                   {kpi.label}
                 </p>
-                <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 mt-1">{kpi.value}</p>
+                <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 mt-1">{loading || loadError ? '—' : kpi.value}</p>
                 <p className="text-[11px] text-slate-400 mt-0.5">Data backend</p>
               </div>
               <div className="w-10 h-10 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center shrink-0">
@@ -190,20 +193,21 @@ export const AdminParentsPage: React.FC = () => {
         >
           <option value="">Semua Status Akun</option>
           <option value="ACTIVE">Aktif</option>
-          <option value="PENDING_ACTIVATION">Belum Aktivasi</option>
+
           <option value="INACTIVE">Nonaktif</option>
         </select>
       </FilterBar>
 
       {/* Data Table */}
-      <DataTable
+      <button type="button" onClick={() => void loadParents()} disabled={loading} className="text-sm text-blue-700">Muat Ulang</button>
+      {loadError ? <ErrorState message={loadError} onRetry={loadParents} /> : loading ? <LoadingSkeleton type="table" /> : <DataTable
         columns={columns}
         data={filteredParents}
-        emptyTitle={loading ? 'Memuat data wali...' : 'Belum ada akun orang tua.'}
+        emptyTitle={hasActiveFilters ? 'Tidak ada wali sesuai filter.' : 'Belum ada data wali.'}
         emptyDescription="Akun orang tua akan muncul setelah data tersimpan di backend."
         emptyActionText="Tambah Akun Orang Tua"
         onEmptyAction={() => setShowParentModal(true)}
-      />
+      />}
 
       {/* Modals & Drawers */}
       <ParentFormModal isOpen={showParentModal} onClose={() => setShowParentModal(false)} onCreated={loadParents} />

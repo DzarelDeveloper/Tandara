@@ -36,8 +36,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = async () => {
-    await authService.logout();
-    setSession(null);
+    try { await authService.logout(); } finally { setSession(null); }
   };
 
   const isAdmin = session?.role === 'ADMIN_IT';

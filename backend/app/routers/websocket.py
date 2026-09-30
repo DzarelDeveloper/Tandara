@@ -11,20 +11,36 @@ from ..services.parent_realtime import parent_connections
 
 router = APIRouter()
 
+STAFF_ATTENDANCE_ROLES = frozenset({'ADMIN_IT', 'GURU_PIKET'})
+
 
 @router.websocket('/ws/attendance')
 async def websocket(ws: WebSocket):
     token = ws.query_params.get('token')
+    db = SessionLocal()
     try:
-        payload = jwt.decode(token or '', settings.secret_key, algorithms=['HS256'])
-        db = SessionLocal()
-        user = db.get(User, int(payload['sub']))
-        db.close()
-        if not user or not user.is_active:
+        if not token:
+            raise ValueError('missing token')
+        payload = jwt.decode(token, settings.secret_key, algorithms=['HS256'])
+        sub = payload.get('sub')
+        if sub is None:
+            raise ValueError('missing subject')
+        user = db.get(User, int(sub))
+        if user is None:
+            raise ValueError('unknown user')
+        if not user.is_active:
             raise ValueError('inactive user')
+        if user.role == 'PARENT':
+            raise ValueError('parent role forbidden')
+        if user.role not in STAFF_ATTENDANCE_ROLES:
+            raise ValueError('role not staff attendance')
     except Exception:
-        await ws.close(code=1008); return
-    await ws.accept(); clients.add(ws)
+        db.close()
+        await ws.close(code=1008)
+        return
+    db.close()
+    await ws.accept()
+    clients.add(ws)
     try:
         while True:
             await ws.receive_text()

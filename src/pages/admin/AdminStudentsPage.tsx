@@ -3,14 +3,18 @@
  * Route: /admin/students
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { UserPlus, UploadCloud, ScanFace } from 'lucide-react';
+import { ErrorState } from '../../components/ui/ErrorState';
+import { LoadingSkeleton } from '../../components/ui/LoadingSkeleton';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { FilterBar } from '../../components/ui/FilterBar';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { StudentFormModal } from '../../components/admin/StudentFormModal';
 import { StudentImportModal } from '../../components/admin/StudentImportModal';
 import { FaceEnrollmentDrawer } from '../../components/admin/FaceEnrollmentDrawer';
+import { PermanentDeleteStudentModal } from '../../components/admin/PermanentDeleteStudentModal';
+import { createStudentLifecycleStore } from '../../services/student-lifecycle.store';
 import { Class, Student } from '../../types';
 import { studentsService } from '../../services/students.service';
 import { useToast } from '../../context/ToastContext';
@@ -26,15 +30,30 @@ export const AdminStudentsPage: React.FC = () => {
   const [showImportModal, setShowImportModal] = useState(false);
   const [showFaceDrawer, setShowFaceDrawer] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
-  const [students, setStudents] = useState<Student[]>([]);
+  const lifecycle = useMemo(() => createStudentLifecycleStore(), []);
+  const { active, students, loading, error: loadError, activeCount, inactiveCount, mutating } = useSyncExternalStore(lifecycle.subscribe, lifecycle.snapshot);
+  const [deletingStudent, setDeletingStudent] = useState<Student | null>(null);
+  const [editingStudent, setEditingStudent] = useState<Student | null>(null);
   const [classes, setClasses] = useState<Class[]>([]);
   const { showToast } = useToast();
 
-  const loadStudents = async () => {
-    try { setStudents(await studentsService.getStudents()); }
-    catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal memuat data siswa.' }); }
+  const loadStudents = lifecycle.load;
+  useEffect(() => { void loadStudents(); classesService.getClasses().then(setClasses).catch((error) => showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal memuat kelas.' })); }, [lifecycle]);
+  const changeView = (next: boolean) => {
+    setSelectedStudent(null); setEditingStudent(null); setDeletingStudent(null);
+    setShowStudentModal(false); setShowFaceDrawer(false); setShowImportModal(false);
+    void lifecycle.selectView(next);
   };
-  useEffect(() => { void loadStudents(); classesService.getClasses().then(setClasses).catch((error) => showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal memuat kelas.' })); }, []);
+  const changeStatus = async (student: Student) => {
+    const deactivate = student.status === 'ACTIVE';
+    if (!window.confirm(deactivate
+      ? `Nonaktifkan ${student.fullName}? Data siswa tidak akan dihapus. Riwayat presensi dan data wajah tetap tersimpan dan siswa dapat diaktifkan kembali.`
+      : `Aktifkan kembali ${student.fullName}? Identitas, riwayat, hubungan wali, dan enrollment tetap tersimpan.`)) return;
+    try {
+      await lifecycle.mutate(async () => { if (deactivate) await studentsService.deactivateStudent(student.id); else await studentsService.reactivateStudent(student.id); });
+      showToast({ type: 'success', message: deactivate ? 'Siswa dinonaktifkan.' : 'Siswa diaktifkan kembali.' });
+    } catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Status belum dapat diubah.' }); }
+  };
 
   // Table columns definition ready for future student objects
   const columns: Column<Student>[] = [
@@ -44,7 +63,7 @@ export const AdminStudentsPage: React.FC = () => {
       render: (item) => (
         <div>
           <div className="font-semibold text-slate-900">{item.fullName}</div>
-          <div className="text-xs text-slate-500">Gender: {item.gender === 'L' ? 'Laki-laki' : 'Perempuan'}</div>
+          <div className="text-xs text-slate-500">Gender: {item.gender === 'L' ? 'Laki-laki' : item.gender === 'P' ? 'Perempuan' : '—'}</div>
         </div>
       ),
     },
@@ -88,6 +107,7 @@ export const AdminStudentsPage: React.FC = () => {
         </span>
       ),
     },
+    { key: 'status', header: 'Status', render: (item) => item.status === 'ACTIVE' ? 'Aktif' : 'Nonaktif' },
     {
       key: 'updatedAt',
       header: 'Terakhir Diperbarui',
@@ -98,11 +118,18 @@ export const AdminStudentsPage: React.FC = () => {
       header: 'Aksi',
       className: 'text-right',
       render: (item) => (
-        <div className="flex justify-end gap-2">
-          <button type="button" onClick={() => { setSelectedStudent(item); setShowFaceDrawer(true); }} className="text-xs text-[#2563EB] hover:text-[#1D4ED8] font-medium">
-            {item.faceRegistered ? 'Daftarkan Ulang' : 'Daftarkan Wajah'}
-          </button>
-          {item.faceRegistered && <button type="button" onClick={async () => { if (!window.confirm('Hapus enrollment biometrik siswa ini?')) return; try { await faceEnrollmentService.remove(item.id); await loadStudents(); showToast({ type: 'success', message: 'Enrollment wajah dihapus.' }); } catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal menghapus enrollment wajah.' }); } }} className="text-xs text-red-600 hover:text-red-800 font-medium">Hapus Wajah</button>}
+        <div className="flex flex-wrap justify-end gap-2">
+          <button disabled={mutating} type="button" className="text-xs text-blue-700" onClick={() => { setEditingStudent(item); setShowStudentModal(true); }}>Edit</button>
+          <button disabled={mutating} type="button" className="text-xs text-blue-700" onClick={() => void changeStatus(item)}>{active ? 'Nonaktifkan' : 'Aktifkan Kembali'}</button>
+          {active && <>
+            <button disabled={mutating} type="button" onClick={() => { setSelectedStudent(item); setShowFaceDrawer(true); }} className="text-xs text-blue-700">{item.faceRegistered ? 'Daftarkan Ulang' : 'Daftarkan Wajah'}</button>
+            {item.faceRegistered && <button disabled={mutating} type="button" className="text-xs text-red-600" onClick={async () => {
+              if (!window.confirm(`Hapus enrollment biometrik ${item.fullName}?`)) return;
+              try { const result = await lifecycle.mutate(() => faceEnrollmentService.remove(item.id)); showToast({ type: result.cleanupPending ? 'info' : 'success', message: result.cleanupPending ? 'Enrollment dihapus. Pembersihan berkas wajah terisolasi memerlukan tindak lanjut Admin IT.' : 'Enrollment wajah dihapus.' }); }
+              catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal menghapus enrollment wajah.' }); }
+            }}>Hapus Wajah</button>}
+          </>}
+          <details className="basis-full border-t border-slate-200 pt-2 text-xs text-slate-500"><summary className="cursor-pointer">Tindakan lainnya</summary><button disabled={mutating} type="button" onClick={() => setDeletingStudent(item)} className="mt-2 text-red-700">Hapus Permanen</button></details>
         </div>
       ),
     },
@@ -134,7 +161,7 @@ export const AdminStudentsPage: React.FC = () => {
           <>
             <button
               type="button"
-              onClick={() => setShowStudentModal(true)}
+              onClick={() => { setEditingStudent(null); setShowStudentModal(true); }}
               className="inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white bg-[#2563EB] hover:bg-[#1D4ED8] rounded-lg shadow-xs transition-colors focus:ring-2 focus:ring-blue-500 focus:outline-none"
             >
               <UserPlus className="w-4 h-4" />
@@ -150,6 +177,7 @@ export const AdminStudentsPage: React.FC = () => {
             </button>
             <button
               type="button"
+              disabled={!active || loading || mutating}
               onClick={() => setShowFaceDrawer(true)}
               className="inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-semibold text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-lg transition-colors focus:ring-2 focus:ring-teal-500 focus:outline-none"
             >
@@ -160,6 +188,11 @@ export const AdminStudentsPage: React.FC = () => {
         }
       />
 
+      <div className="flex gap-2 border-b border-slate-200" role="tablist" aria-label="Status siswa">
+        {[true, false].map((value) => <button key={String(value)} type="button" role="tab" aria-selected={active === value} disabled={mutating} onClick={() => changeView(value)} className={`px-4 py-2.5 text-sm font-semibold border-b-2 ${active === value ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500'}`}>
+          {value ? 'Siswa Aktif' : 'Siswa Nonaktif'}{(value ? activeCount : inactiveCount) !== null ? ` (${value ? activeCount : inactiveCount})` : ''}
+        </button>)}
+      </div>
       {/* Filter and Search Bar */}
       <FilterBar
         searchValue={search}
@@ -191,18 +224,24 @@ export const AdminStudentsPage: React.FC = () => {
       </FilterBar>
 
       {/* Data Table with Meaningful Empty State */}
-      <DataTable
+      <button type="button" onClick={() => void loadStudents()} disabled={loading} className="text-sm text-blue-700">Muat Ulang</button>
+      {loadError ? <ErrorState message={loadError} onRetry={loadStudents} /> : loading ? <LoadingSkeleton type="table" /> : <DataTable
+        key={`${active}-${search}-${selectedClass}-${selectedFaceStatus}`}
         columns={columns}
         data={filteredStudents}
-        emptyTitle="Belum ada data siswa."
+        emptyTitle={hasActiveFilters ? "Tidak ada siswa sesuai filter." : (active ? "Belum ada siswa aktif." : "Belum ada siswa nonaktif.")}
         emptyDescription="Data siswa akan muncul setelah tersedia di backend."
-        emptyActionText="Tambah Siswa Baru"
-        onEmptyAction={() => setShowStudentModal(true)}
-      />
+        emptyActionText={active ? "Tambah Siswa Baru" : undefined}
+        onEmptyAction={() => { setEditingStudent(null); setShowStudentModal(true); }}
+      />}
 
+      {deletingStudent && <PermanentDeleteStudentModal key={deletingStudent.id} student={deletingStudent} onClose={() => setDeletingStudent(null)} onDelete={async () => {
+        const result = await lifecycle.mutate(() => studentsService.permanentlyDeleteStudent(deletingStudent.id));
+        showToast({ type: result.cleanupPending ? 'info' : 'success', message: result.cleanupPending ? 'Siswa dihapus. Pembersihan berkas wajah terisolasi memerlukan tindak lanjut Admin IT.' : 'Siswa berhasil dihapus permanen.' });
+      }} />}
       {/* Modals & Drawer */}
-      <StudentFormModal isOpen={showStudentModal} onClose={() => setShowStudentModal(false)} onCreated={loadStudents} />
-      <StudentImportModal isOpen={showImportModal} onClose={() => setShowImportModal(false)} />
+      <StudentFormModal isOpen={showStudentModal} student={editingStudent} onClose={() => { setShowStudentModal(false); setEditingStudent(null); }} onCreated={loadStudents} />
+      <StudentImportModal onImported={loadStudents} isOpen={showImportModal} onClose={() => setShowImportModal(false)} />
       <FaceEnrollmentDrawer isOpen={showFaceDrawer} onClose={() => { setShowFaceDrawer(false); setSelectedStudent(null); }} students={students} selectedStudent={selectedStudent} onCompleted={loadStudents} />
     </div>
   );

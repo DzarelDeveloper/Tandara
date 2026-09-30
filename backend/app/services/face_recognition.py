@@ -173,7 +173,9 @@ class FaceRecognitionService:
         x, y, width, height = [float(value) for value in face[:4]]
         bbox_is_finite = bool(np.isfinite([x, y, width, height]).all()) and frame_width > 0 and frame_height > 0
         face_box = self.normalize_face_box(face, frame) if bbox_is_finite else None
+        quality_started = time.perf_counter()
         quality_error = face_engine.validate_face_quality(frame, face)
+        quality_ms = (time.perf_counter() - quality_started) * 1000
         assessment = getattr(face_engine, '_last_quality_assessment', None)
         sharpness = assessment.sharpness if assessment is not None else 0.0
         quality_status = assessment.status if assessment is not None else ('GOOD' if not quality_error else quality_error)
@@ -196,8 +198,8 @@ class FaceRecognitionService:
             track.cache_expires_at = 0.0
             track.verified_until = 0.0
             total_ms = index_ms + detection_ms
-            timings = {'index': index_ms, 'detection': detection_ms, 'embedding': 0.0, 'matching': 0.0, 'total': total_ms}
-            telemetry.update({'recognition_status': quality_error, 'timings_ms': timings})
+            timings = {'index': index_ms, 'detection': detection_ms, 'quality': quality_ms, 'embedding': 0.0, 'matching': 0.0, 'total': total_ms + quality_ms}
+            telemetry.update({'recognition_status': quality_error, 'quality_ms': quality_ms, 'timings_ms': timings})
             return RecognitionResult(quality_error, reason=quality_error, face_box=face_box, timings_ms=timings, telemetry=telemetry, track_id=track.track_id)
 
         identity_locked = (track.verified_student_id == track.student_id and track.student_id is not None and now < track.verified_until)
@@ -205,10 +207,11 @@ class FaceRecognitionService:
             cached_status = track.recognition_status
             telemetry.update({
                 'recognition_status': cached_status,
+                'quality_ms': quality_ms,
                 'recognition_similarity': track.similarity,
                 'candidate_id': track.student_id if cached_status == 'RECOGNIZED' else None,
                 'cached': True,
-                'timings_ms': {'index': index_ms, 'detection': detection_ms, 'embedding': 0.0, 'matching': 0.0, 'total': index_ms + detection_ms},
+                'timings_ms': {'index': index_ms, 'detection': detection_ms, 'quality': quality_ms, 'embedding': 0.0, 'matching': 0.0, 'total': index_ms + detection_ms + quality_ms},
             })
             return RecognitionResult(cached_status, student_id=track.student_id if cached_status == 'RECOGNIZED' else None, similarity=track.similarity, face_box=face_box, timings_ms=telemetry['timings_ms'], telemetry=telemetry, track_id=track.track_id)
 
@@ -218,6 +221,8 @@ class FaceRecognitionService:
             track.similarity = None
             track.cache_expires_at = now + self.REJECTED_CACHE_SECONDS
             telemetry['recognition_status'] = 'NO_ENROLLED_FACES'
+            telemetry['quality_ms'] = quality_ms
+            telemetry['timings_ms'] = {'index': index_ms, 'detection': detection_ms, 'quality': quality_ms, 'embedding': 0.0, 'matching': 0.0, 'total': index_ms + detection_ms + quality_ms}
             return RecognitionResult('NO_ENROLLED_FACES', reason='NO_ENROLLED_FACES', face_box=face_box, telemetry=telemetry, track_id=track.track_id)
 
         embedding_started = time.perf_counter()
@@ -230,13 +235,14 @@ class FaceRecognitionService:
         matching_started = time.perf_counter()
         student_id, similarity, second_similarity = self.find_best_match(query_embedding, student_ids, embeddings)
         matching_ms = (time.perf_counter() - matching_started) * 1000
-        timings = {'index': index_ms, 'detection': detection_ms, 'embedding': embedding_ms, 'matching': matching_ms, 'total': index_ms + detection_ms + embedding_ms + matching_ms}
+        timings = {'index': index_ms, 'detection': detection_ms, 'quality': quality_ms, 'embedding': embedding_ms, 'matching': matching_ms, 'total': index_ms + detection_ms + quality_ms + embedding_ms + matching_ms}
         diff_margin = similarity - second_similarity if similarity is not None and second_similarity is not None else None
         telemetry.update({
             'recognition_similarity': round(similarity, 4) if similarity is not None else None,
             'second_best_similarity': round(second_similarity, 4) if second_similarity is not None else None,
             'ambiguity_margin': round(diff_margin, 4) if diff_margin is not None else None,
             'timings_ms': timings,
+            'quality_ms': quality_ms,
         })
 
         if student_id is None or similarity is None or similarity < settings.face_recognition_threshold:
@@ -282,7 +288,9 @@ class FaceRecognitionService:
             return [RecognitionResult('ENGINE_NOT_READY', reason='ENGINE_NOT_READY')]
         detection_ms = (time.perf_counter() - detection_started) * 1000
         if not faces:
+            tracking_started = time.perf_counter()
             self._get_tracker(session_id, time.monotonic()).update([], now=time.monotonic())
+            tracking_ms = (time.perf_counter() - tracking_started) * 1000
             if not student_ids:
                 telemetry = {
                     'frame_size_px': {'width': frame.shape[1], 'height': frame.shape[0]},
@@ -290,17 +298,19 @@ class FaceRecognitionService:
                     'candidate_count': 0,
                     'quality_status': 'NO_FACE',
                     'recognition_status': 'NO_ENROLLED_FACES',
-                    'timings_ms': {'index': index_ms, 'detection': detection_ms, 'embedding': 0.0, 'matching': 0.0, 'total': (time.perf_counter() - started) * 1000},
+                    'tracking_ms': tracking_ms, 'temporal_ms': 0.0, 'liveness_ms': 0.0,
+                    'timings_ms': {'index': index_ms, 'detection': detection_ms, 'tracking': tracking_ms, 'temporal': 0.0, 'liveness': 0.0, 'embedding': 0.0, 'matching': 0.0, 'total': (time.perf_counter() - started) * 1000},
                 }
                 return [RecognitionResult('NO_ENROLLED_FACES', reason='NO_ENROLLED_FACES', timings_ms=telemetry['timings_ms'], telemetry=telemetry)]
             total_ms = (time.perf_counter() - started) * 1000
-            timings = {'index': index_ms, 'detection': detection_ms, 'embedding': 0.0, 'matching': 0.0, 'total': total_ms}
+            timings = {'index': index_ms, 'detection': detection_ms, 'tracking': tracking_ms, 'temporal': 0.0, 'liveness': 0.0, 'embedding': 0.0, 'matching': 0.0, 'total': total_ms}
             telemetry = {
                 'frame_size_px': {'width': frame.shape[1], 'height': frame.shape[0]},
                 'detection_count': 0,
                 'candidate_count': len(student_ids),
                 'quality_status': 'NO_FACE',
                 'recognition_status': 'FACE_NOT_DETECTED',
+                'tracking_ms': tracking_ms, 'temporal_ms': 0.0, 'liveness_ms': 0.0,
                 'timings_ms': timings,
             }
             return [RecognitionResult('FACE_NOT_DETECTED', reason='FACE_NOT_DETECTED', timings_ms=timings, telemetry=telemetry)]
@@ -314,8 +324,10 @@ class FaceRecognitionService:
                 normalized_boxes.append((x / frame_width, y / frame_height, width / frame_width, height / frame_height))
             else:
                 normalized_boxes.append((0.0, 0.0, 0.0, 0.0))
+        tracking_started = time.perf_counter()
         tracker = self._get_tracker(session_id, now)
         tracks = tracker.update(normalized_boxes, now=now)
+        tracking_ms = (time.perf_counter() - tracking_started) * 1000
         results = [
             self._recognize_face(
                 frame,
@@ -330,10 +342,15 @@ class FaceRecognitionService:
             )
             for face, track in zip(faces, tracks)
         ]
+        for result in results:
+            result.telemetry['detection_count'] = len(faces)
+            result.telemetry['tracking_ms'] = tracking_ms
+            result.timings_ms['tracking'] = tracking_ms
         if session_id < 0:
             return results  # Single-image Phase 1 diagnostics remain available.
         verified_results = []
         for result, track, face in zip(results, tracks, faces):
+            temporal_started = time.perf_counter()
             usable = result.status in ('RECOGNIZED', 'UNKNOWN_FACE', 'AMBIGUOUS_FACE')
             verify_observation(
                 track, status=result.status, student_id=result.student_id,
@@ -342,15 +359,20 @@ class FaceRecognitionService:
                 fresh=usable and not result.telemetry.get('cached', False),
                 ambiguity_margin=result.telemetry.get('ambiguity_margin'),
             )
+            temporal_ms = (time.perf_counter() - temporal_started) * 1000
+            liveness_started = time.perf_counter()
             update_liveness(track, face, now=now, quality_ok=usable)
+            liveness_ms = (time.perf_counter() - liveness_started) * 1000
             verification_ms = ((track.verified_at - track.first_seen) * 1000
                                if track.verified_at is not None and track.first_seen is not None else None)
             result.telemetry.update({
                 'liveness_state': track.liveness_state, 'liveness_signals': track.liveness_signals,
                 'verification_path': track.verification_path, 'verification_latency_ms': verification_ms,
                 'evidence_count': track.evidence_count,
+                'tracking_ms': tracking_ms, 'temporal_ms': temporal_ms, 'liveness_ms': liveness_ms,
                 'frame_total_ms': (time.perf_counter() - started) * 1000,
             })
+            result.timings_ms.update({'tracking': tracking_ms, 'temporal': temporal_ms, 'liveness': liveness_ms})
             verified_results.append(replace(result, track_state=track.state, evidence_count=track.evidence_count, liveness_state=track.liveness_state))
         return verified_results
 
@@ -376,17 +398,27 @@ class FaceRecognitionService:
         return self.recognize_frame(image, db)
 
     def recognize_image_many(self, content: bytes, db: Session, *, session_id: int) -> list[RecognitionResult]:
+        backend_started = time.perf_counter()
         if not content or len(content) > settings.max_upload_mb * 1024 * 1024:
             return [RecognitionResult('INVALID_IMAGE', reason='INVALID_IMAGE')]
         if face_engine.initialize() != FaceEngineStatus.READY:
             return [RecognitionResult('ENGINE_NOT_READY', reason='ENGINE_NOT_READY')]
+        decode_started = time.perf_counter()
         try:
             image = face_engine._cv2.imdecode(np.frombuffer(content, dtype=np.uint8), face_engine._cv2.IMREAD_COLOR)
         except Exception:
             image = None
+        decode_ms = (time.perf_counter() - decode_started) * 1000
         if image is None:
             return [RecognitionResult('INVALID_IMAGE', reason='INVALID_IMAGE')]
-        return self.recognize_frame_many(image, db, session_id=session_id)
+        results = self.recognize_frame_many(image, db, session_id=session_id)
+        backend_total_ms = (time.perf_counter() - backend_started) * 1000
+        for result in results:
+            result.telemetry['decode_ms'] = decode_ms
+            result.telemetry['backend_total_ms'] = backend_total_ms
+            result.timings_ms['decode'] = decode_ms
+            result.timings_ms['backend_total'] = backend_total_ms
+        return results
 
 
 face_recognition_service = FaceRecognitionService()

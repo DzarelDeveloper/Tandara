@@ -39,15 +39,61 @@ def test_blur_gap_motion_and_scale_change_preserve_evidence():
     assert len(moved.observations) == 3
 
 
-@pytest.mark.parametrize('middle', [2, None])
-def test_conflicting_or_unknown_evidence_blocks_verification(middle):
+def test_different_identity_evidence_blocks_verification():
     track = FaceTrack(1, (0, 0, .1, .1), 0)
     observe(track, 0)
-    observe(track, .4, middle, 'RECOGNIZED' if middle else 'UNKNOWN_FACE')
+    observe(track, .4, student_id=2, status='RECOGNIZED')
     observe(track, .8)
     observe(track, 1.2)
     assert track.state == 'VERIFYING'
     assert track.verified_student_id is None
+
+
+def test_one_unknown_or_ambiguous_is_a_bounded_miss_for_same_track():
+    for weak_status in ('UNKNOWN_FACE', 'AMBIGUOUS_FACE'):
+        track = FaceTrack(1, (0, 0, .1, .1), 0)
+        observe(track, 0)
+        observe(track, .35, student_id=None, status=weak_status)
+        assert len(track.observations) == 1
+        assert track.consecutive_temporal_misses == 1
+        observe(track, .7)
+        observe(track, 1.0)
+        assert track.state == 'VERIFIED'
+        assert track.verified_student_id == 1
+
+
+def test_repeated_unknown_observations_clear_candidate_evidence():
+    track = FaceTrack(1, (0, 0, .1, .1), 0)
+    observe(track, 0)
+    observe(track, .2, student_id=None, status='UNKNOWN_FACE')
+    observe(track, .4, student_id=None, status='UNKNOWN_FACE')
+    assert not track.observations
+    assert track.evidence_count == 0
+    observe(track, .6)
+    assert track.state == 'VERIFYING'
+    assert track.verified_student_id is None
+
+
+def test_strong_different_identity_clears_old_candidate_before_new_evidence():
+    track = FaceTrack(1, (0, 0, .1, .1), 0)
+    observe(track, 0, student_id=1)
+    observe(track, .35, student_id=1)
+    observe(track, .7, student_id=2)
+    assert [item.student_id for item in track.observations] == [2]
+    assert track.verified_student_id is None
+    assert track.state == 'VERIFYING'
+
+
+def test_cached_recognition_does_not_complete_unverified_temporal_evidence():
+    track = FaceTrack(1, (0, 0, .1, .1), 0)
+    observe(track, 0)
+    observe(track, .3, fresh=False)
+    observe(track, .7, fresh=False)
+    assert track.state == 'VERIFYING'
+    assert track.evidence_count == 1
+    observe(track, .8, fresh=True)
+    observe(track, .9, fresh=True)
+    assert track.state == 'VERIFIED'
 
 
 def test_evidence_expires_and_minimum_is_configurable(monkeypatch):

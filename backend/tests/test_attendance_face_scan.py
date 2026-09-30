@@ -24,9 +24,9 @@ def open_session(client, headers, mode='CHECK_IN'):
 	return int(response.json()['data']['id'])
 
 
-def submit_scan(client, headers, session_id, content=b'one-frame'):
+def submit_scan(client, headers, session_id, content=b'one-frame', benchmark=False):
 	return client.post(
-		'/api/attendance/scan', headers=headers, data={'session_id': str(session_id)},
+		'/api/attendance/scan', headers=headers, data={'session_id': str(session_id), 'benchmark': str(benchmark).lower()},
 		files={'image': ('capture.jpg', content, 'image/jpeg')},
 	)
 
@@ -254,6 +254,61 @@ def test_broadcast_failure_does_not_undo_committed_attendance(client, headers, s
 	db = SessionLocal()
 	assert db.query(Attendance).filter_by(student_id=student).one().check_in_method == 'FACE'
 	db.close()
+
+
+def test_development_benchmark_runs_verified_path_without_persisting_or_publishing(client, headers, student, monkeypatch):
+	session_id = open_session(client, headers['admin'])
+	monkeypatch.setattr(attendance_router.settings, 'app_env', 'development')
+	monkeypatch.setattr(attendance_router.face_recognition_service, 'recognize_image_many', lambda *args, **kwargs: [recognized(student)])
+	events = []
+
+	async def broadcast(event, data):
+		events.append((event, data))
+
+	monkeypatch.setattr(attendance_router, 'broadcast', broadcast)
+	response = submit_scan(client, headers['admin'], session_id, benchmark=True)
+	assert response.status_code == 200
+	data = response.json()['data']
+	assert data['benchmarkMode'] is True
+	assert data['attendances'] == []
+	assert data['faces'][0]['benchmarkReady'] is True
+	assert data['faces'][0]['attendanceStatus'] == 'NOT_RECORDED'
+	assert 'studentName' not in data['faces'][0]
+	timings = data['faces'][0]['telemetry']['timings_ms']
+	assert timings['attendance_write'] == 0.0
+	assert timings['realtime_publish'] == 0.0
+	assert timings['backend_total'] >= 0
+	assert events == []
+	with SessionLocal() as db:
+		assert db.query(Attendance).count() == 0
+
+
+def test_benchmark_mode_is_rejected_in_production_before_recognition(client, headers, monkeypatch):
+	session_id = open_session(client, headers['admin'])
+	called = []
+	monkeypatch.setattr(attendance_router.settings, 'app_env', 'production')
+	monkeypatch.setattr(attendance_router.face_recognition_service, 'recognize_image_many', lambda *args, **kwargs: called.append(True))
+	response = submit_scan(client, headers['admin'], session_id, benchmark=True)
+	assert response.status_code == 403
+	assert response.json()['code'] == 'BENCHMARK_NOT_ALLOWED'
+	assert called == []
+
+
+def test_benchmark_mode_does_not_bypass_spoof_or_pending_liveness(client, headers, student, monkeypatch):
+	session_id = open_session(client, headers['admin'])
+	monkeypatch.setattr(attendance_router.settings, 'app_env', 'development')
+	result = recognized(student)
+	tracker = attendance_router.face_recognition_service._trackers[session_id]
+	tracker.get_track(result.track_id).liveness_state = 'SPOOF_SUSPECTED'
+	monkeypatch.setattr(attendance_router.face_recognition_service, 'recognize_image_many', lambda *args, **kwargs: [result])
+	response = submit_scan(client, headers['admin'], session_id, benchmark=True)
+	assert response.status_code == 200
+	face = response.json()['data']['faces'][0]
+	assert face['liveness'] == 'SPOOF_SUSPECTED'
+	assert face.get('benchmarkReady') is None
+	assert face['attendanceStatus'] == 'NOT_RECORDED'
+	with SessionLocal() as db:
+		assert db.query(Attendance).count() == 0
 
 
 def test_scan_contract_does_not_accept_client_identity(client, headers):

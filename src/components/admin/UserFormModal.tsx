@@ -14,8 +14,8 @@ import { Shield, Eye, EyeOff } from 'lucide-react';
 import { usersService } from '../../services/users.service';
 
 const userSchema = z.object({
-  fullName: z.string().min(2, 'Nama lengkap wajib diisi.'),
-  username: z.string().min(4, 'Username minimal 4 karakter.'),
+  fullName: z.string().trim().min(2, 'Nama lengkap wajib diisi.'),
+  username: z.string().trim().min(4, 'Username minimal 4 karakter.'),
   password: z.string().min(8, 'Password sementara minimal 8 karakter.'),
   isActive: z.boolean(),
 });
@@ -133,7 +133,7 @@ export const UserFormModal: React.FC<UserFormModalProps> = ({ isOpen, onClose, o
           <div className="text-[11px] text-slate-600 space-y-1 pl-1 border-t border-slate-200 pt-2">
             <div className="flex items-center gap-1.5 text-slate-700 font-medium">
               <Shield className="w-3.5 h-3.5 text-teal-700" />
-              <span>Hak Akses Terbaca Saja (Read-Only Policy):</span>
+              <span>Hak Akses Operasional:</span>
             </div>
             <ul className="list-disc pl-4 space-y-0.5 text-slate-500">
               <li>Membuka/menutup sesi absensi langsung</li>

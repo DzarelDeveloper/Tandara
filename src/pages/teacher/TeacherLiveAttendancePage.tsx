@@ -13,19 +13,37 @@ import { attendanceService, FaceScanResult, FaceScanTelemetry, TrackedFace } fro
 import { systemService } from '../../services/system.service';
 import { ApiError, BackendDisconnectedError } from '../../services/api';
 import { CAMERA_STORAGE_KEY, cameraConstraints, enumerateVideoDevices, stopMediaStream } from '../../utils/camera';
+import { nextScanDelayMs, nextVisualVerificationState, scanRatePerSecond, tryAcquireScanLock } from '../../utils/live-attendance-scheduler';
 
-type RecognitionState = 'CAMERA_OFF' | 'READY' | 'DETECTING' | 'PROCESSING' | 'SUCCESS' | 'DUPLICATE' | 'UNKNOWN' | 'ERROR' | 'COOLDOWN' | 'CAMERA_ERROR';
+type RecognitionState = 'CAMERA_OFF' | 'READY' | 'DETECTING' | 'VERIFYING' | 'PROCESSING' | 'SUCCESS' | 'DUPLICATE' | 'UNKNOWN' | 'ERROR' | 'COOLDOWN' | 'CAMERA_ERROR';
 interface ScanCycle { delayMs: number; holdResult: boolean }
 
-const requestedScanInterval = Number(import.meta.env.VITE_SCAN_INTERVAL_MS ?? 300);
-const SCAN_INTERVAL_MS = Number.isFinite(requestedScanInterval) ? Math.max(250, Math.min(5000, requestedScanInterval)) : 300;
-const CAPTURE_MAX_WIDTH = 1920;
-const CAPTURE_MAX_HEIGHT = 1080;
-const JPEG_QUALITY = 0.85;
-const DUPLICATE_HOLD_MS = 2400;
-const UNKNOWN_HOLD_MS = 1700;
+const requestedScanInterval = Number(import.meta.env.VITE_SCAN_INTERVAL_MS ?? NaN);
+const SCAN_TARGET_PERIOD_MS = Number.isFinite(requestedScanInterval) ? Math.max(250, Math.min(2000, requestedScanInterval)) : 400;
+const SCAN_MIN_IDLE_MS = 60;
+const requestedScanTimeout = Number(import.meta.env.VITE_SCAN_TIMEOUT_MS ?? 8000);
+const SCAN_TIMEOUT_MS = Number.isFinite(requestedScanTimeout) ? Math.max(2000, Math.min(60000, requestedScanTimeout)) : 8000;
+const requestedScanWidth = Number(import.meta.env.VITE_LIVE_SCAN_MAX_WIDTH ?? 1280);
+const requestedScanHeight = Number(import.meta.env.VITE_LIVE_SCAN_MAX_HEIGHT ?? 720);
+const CAPTURE_MAX_WIDTH = Number.isFinite(requestedScanWidth) ? Math.max(320, Math.min(1920, Math.round(requestedScanWidth))) : 1280;
+const CAPTURE_MAX_HEIGHT = Number.isFinite(requestedScanHeight) ? Math.max(240, Math.min(1080, Math.round(requestedScanHeight))) : 720;
+const JPEG_QUALITY = 0.82;
 const ERROR_HOLD_MS = 2400;
-const RESULT_COOLDOWN_MS = 350;
+const BOX_SMOOTH_ALPHA = 0.45;
+interface SmoothedBox { left: number; top: number; width: number; height: number }
+interface CaptureMetrics {
+  captureMs: number;
+  encodeMs: number;
+  blobBytes: number;
+  sourceWidth: number;
+  sourceHeight: number;
+  submittedWidth: number;
+  submittedHeight: number;
+}
+interface LiveScanMetrics extends CaptureMetrics {
+  requestMs: number;
+  cycleMs: number;
+}
 
 function formatWib(value: string): string {
   return `${new Intl.DateTimeFormat('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' }).format(new Date(value))} WIB`;
@@ -69,22 +87,40 @@ const qualityCodes = new Set([
   'FACE_OUT_OF_FRAME',
 ]);
 
-function captureFrame(video: HTMLVideoElement): Promise<Blob | null> {
+async function captureFrame(video: HTMLVideoElement): Promise<{ blob: Blob; metrics: CaptureMetrics } | null> {
+  const captureStarted = performance.now();
   const sourceWidth = video.videoWidth;
   const sourceHeight = video.videoHeight;
-  if (!sourceWidth || !sourceHeight) return Promise.resolve(null);
+  if (!sourceWidth || !sourceHeight) return null;
   const scale = Math.min(1, CAPTURE_MAX_WIDTH / sourceWidth, CAPTURE_MAX_HEIGHT / sourceHeight);
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(sourceWidth * scale));
   canvas.height = Math.max(1, Math.round(sourceHeight * scale));
   const context = canvas.getContext('2d');
-  if (!context) return Promise.resolve(null);
+  if (!context) return null;
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
-  return new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', JPEG_QUALITY));
+  const captureMs = performance.now() - captureStarted;
+  const encodeStarted = performance.now();
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', JPEG_QUALITY));
+  const encodeMs = performance.now() - encodeStarted;
+  if (!blob) return null;
+  return {
+    blob,
+    metrics: {
+      captureMs,
+      encodeMs,
+      blobBytes: blob.size,
+      sourceWidth,
+      sourceHeight,
+      submittedWidth: canvas.width,
+      submittedHeight: canvas.height,
+    },
+  };
 }
 
 export const TeacherLiveAttendancePage: React.FC = () => {
   const { showBackendNotConnected, showToast } = useToast();
+  const benchmarkMode = import.meta.env.DEV && new URLSearchParams(window.location.search).get('benchmark') === '1';
   const [showSessionModal, setShowSessionModal] = useState(false);
   const [activeMode, setActiveMode] = useState<'CHECK_IN' | 'CHECK_OUT'>('CHECK_IN');
   const [changingSession, setChangingSession] = useState(false);
@@ -102,18 +138,28 @@ export const TeacherLiveAttendancePage: React.FC = () => {
   const [faces, setFaces] = useState<TrackedFace[]>([]);
   const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null);
   const [lastTelemetry, setLastTelemetry] = useState<FaceScanResult['telemetry'] | null>(null);
+  const [performanceMetrics, setPerformanceMetrics] = useState<LiveScanMetrics | null>(null);
+  const [startToStartMs, setStartToStartMs] = useState<number | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scanInFlightRef = useRef(false);
   const scanAbortRef = useRef<AbortController | null>(null);
+  const scanTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openingCameraRef = useRef(false);
   const networkFailureRef = useRef(0);
   const mountedRef = useRef(true);
+  const socketCleanupRef = useRef<(() => void) | null>(null);
+  const lastScanStartedAtRef = useRef<number | null>(null);
+  const verifyingStateRef = useRef({ verifying: false, missedFrames: 0 });
+  const smoothedBoxesRef = useRef<Map<number | string, SmoothedBox>>(new Map());
 
   const clearScanScheduling = useCallback(() => {
     if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
     scanTimerRef.current = null;
+    if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
+    scanTimeoutRef.current = null;
     scanAbortRef.current?.abort();
     scanAbortRef.current = null;
   }, []);
@@ -123,6 +169,8 @@ export const TeacherLiveAttendancePage: React.FC = () => {
     streamRef.current = null;
     setCameraStream(null);
     if (videoRef.current) videoRef.current.srcObject = null;
+    smoothedBoxesRef.current.clear();
+    lastScanStartedAtRef.current = null;
   }, []);
 
   const refreshDevices = useCallback(async () => {
@@ -131,18 +179,23 @@ export const TeacherLiveAttendancePage: React.FC = () => {
   }, []);
 
   const openCamera = useCallback(async (deviceId?: string) => {
+    if (openingCameraRef.current) return;
     if (!navigator.mediaDevices?.getUserMedia) {
       setScanState('CAMERA_ERROR');
       setScanMessage('Browser ini tidak mendukung akses kamera.');
       return;
     }
+    openingCameraRef.current = true;
+    stopMediaStream(streamRef.current);
+    streamRef.current = null;
+    setCameraStream(null);
+    if (videoRef.current) videoRef.current.srcObject = null;
     try {
       const stream = await navigator.mediaDevices.getUserMedia(cameraConstraints(deviceId));
       if (!mountedRef.current) {
         stopMediaStream(stream);
         return;
       }
-      stopMediaStream(streamRef.current);
       streamRef.current = stream;
       setCameraStream(stream);
       setFaces([]);
@@ -160,6 +213,8 @@ export const TeacherLiveAttendancePage: React.FC = () => {
       setScanState('CAMERA_ERROR');
       setScanMessage('Kamera tidak dapat diakses. Periksa izin atau pilihan kamera.');
       showToast({ type: 'error', title: 'Kamera tidak tersedia', message: error instanceof Error ? error.message : 'Periksa izin kamera browser.' });
+    } finally {
+      openingCameraRef.current = false;
     }
   }, [refreshDevices, showToast]);
 
@@ -189,32 +244,57 @@ export const TeacherLiveAttendancePage: React.FC = () => {
   }, [showToast]);
   useEffect(() => { refreshRecent(); }, [refreshRecent]);
 
-  useEffect(() => attendanceService.subscribe((message) => {
-    if (['ATTENDANCE_SCHEDULE_UPDATED', 'ATTENDANCE_CORRECTED'].includes(message.event)) { refreshRecent(); return; }
-    if (message.event !== 'ATTENDANCE_SUCCESS') return;
-    const data = message.data;
-    const event = fromAttendanceEvent(data, message.timestamp);
-    if (event) addRecentDetection(event);
-  }), [addRecentDetection, sessionId, refreshRecent]);
+  useEffect(() => {
+    if (socketCleanupRef.current) {
+      socketCleanupRef.current();
+      socketCleanupRef.current = null;
+    }
+    const cleanup = attendanceService.subscribeWithDisconnect((message) => {
+      if (['ATTENDANCE_SCHEDULE_UPDATED', 'ATTENDANCE_CORRECTED'].includes(message.event)) { void refreshRecent(); return; }
+      if (message.event !== 'ATTENDANCE_SUCCESS') return;
+      const data = message.data;
+      const event = fromAttendanceEvent(data, message.timestamp);
+      if (event) addRecentDetection(event);
+    }, (firstDisconnect) => {
+      if (!mountedRef.current) return;
+      if (firstDisconnect) {
+        showBackendNotConnected('Koneksi realtime absensi terputus. Pemulihan otomatis sedang berjalan.');
+      }
+    });
+    socketCleanupRef.current = cleanup;
+    return () => {
+      if (socketCleanupRef.current) {
+        socketCleanupRef.current();
+        socketCleanupRef.current = null;
+      }
+    };
+  }, [addRecentDetection, sessionId, refreshRecent, showBackendNotConnected]);
 
   const scanFrame = useCallback(async (): Promise<ScanCycle> => {
+    const cycleStarted = performance.now();
     const video = videoRef.current;
-    if (!sessionId || !streamRef.current || !video || scanInFlightRef.current) return { delayMs: SCAN_INTERVAL_MS, holdResult: false };
-    scanInFlightRef.current = true;
+    const defaultDelay = SCAN_MIN_IDLE_MS;
+    if (!sessionId || !streamRef.current || !video) return { delayMs: defaultDelay, holdResult: false };
+    if (!tryAcquireScanLock(scanInFlightRef)) return { delayMs: defaultDelay, holdResult: false };
     const controller = new AbortController();
     scanAbortRef.current = controller;
+    if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
+    scanTimeoutRef.current = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
+    let captureMetrics: CaptureMetrics | null = null;
+    let requestStarted = 0;
+    let requestMs = 0;
     try {
-      setScanState('DETECTING');
-      setScanMessage('Mendeteksi wajah...');
-      const frame = await captureFrame(video);
-      if (!frame || !mountedRef.current) return { delayMs: SCAN_INTERVAL_MS, holdResult: false };
-      setScanState('PROCESSING');
-      setScanMessage('Memverifikasi wajah...');
-      const started = performance.now();
-      const result = await attendanceService.scanFrame(sessionId, frame, controller.signal);
-      if (!mountedRef.current || controller.signal.aborted) return { delayMs: SCAN_INTERVAL_MS, holdResult: false };
+      const captured = await captureFrame(video);
+      if (!mountedRef.current || controller.signal.aborted) return { delayMs: defaultDelay, holdResult: false };
+      if (!captured) return { delayMs: defaultDelay, holdResult: false };
+      captureMetrics = captured.metrics;
+      if (!scanInFlightRef.current || controller.signal.aborted) return { delayMs: defaultDelay, holdResult: false };
+      requestStarted = performance.now();
+      const result = await attendanceService.scanFrame(sessionId, captured.blob, controller.signal, benchmarkMode);
+      if (!mountedRef.current || controller.signal.aborted) return { delayMs: defaultDelay, holdResult: false };
+      requestMs = performance.now() - requestStarted;
       networkFailureRef.current = 0;
-      setLastLatencyMs(performance.now() - started);
+      setLastLatencyMs(requestMs);
       setFaces(result.faces);
       setManualOnly(result.livenessMode === 'MANUAL_ONLY');
       setLastTelemetry(result.faces.find((face) => face.telemetry)?.telemetry ?? null);
@@ -222,20 +302,29 @@ export const TeacherLiveAttendancePage: React.FC = () => {
       setScanResult(recorded[0] ?? null);
       const duplicate = result.faces.some((face) => face.attendanceStatus === 'ALREADY_RECORDED');
       const failed = result.faces.some((face) => face.status === 'ATTENDANCE_ERROR' || face.status === 'CHECK_OUT_TOO_EARLY');
-      const verifying = result.faces.some((face) => face.state === 'TRACKING' || face.state === 'VERIFYING' || face.liveness === 'LIVENESS_PENDING');
-      setScanState(recorded.length ? 'SUCCESS' : failed ? 'ERROR' : duplicate ? 'DUPLICATE' : verifying ? 'PROCESSING' : 'UNKNOWN');
-      setScanMessage(recorded.length ? `${recorded.length} presensi berhasil dicatat.` : failed ? result.faces.find((face) => face.message)?.message ?? 'Sebagian presensi gagal dicatat. Mencoba kembali...' : duplicate ? 'Presensi sudah tercatat.' : result.livenessMode === 'MANUAL_ONLY' ? 'Presensi otomatis dinonaktifkan. Gunakan verifikasi manual oleh petugas.' : result.faces.some((face) => face.liveness === 'SPOOF_SUSPECTED') ? 'Perlu pemeriksaan petugas.' : verifying ? 'Memverifikasi wajah...'  : 'Wajah belum dikenali. Mencoba kembali...');
+      const verifying = result.faces.some((face) => face.state === 'TRACKING' || face.state === 'VERIFYING' || (face.recognitionStatus === 'RECOGNIZED' && face.liveness === 'LIVENESS_PENDING'));
+      const securityPending = result.faces.some((face) => face.recognitionStatus === 'RECOGNIZED' && face.trackState === 'VERIFIED' && face.liveness === 'LIVENESS_PENDING');
+      verifyingStateRef.current = nextVisualVerificationState(verifyingStateRef.current.verifying, verifying, verifyingStateRef.current.missedFrames);
+      const benchmarkReady = Boolean(result.benchmarkMode && result.faces.some((face) => face.benchmarkReady));
+      setScanState(recorded.length ? 'SUCCESS' : failed ? 'ERROR' : securityPending ? 'PROCESSING' : verifyingStateRef.current.verifying || benchmarkReady ? 'VERIFYING' : duplicate ? 'DUPLICATE' : result.faces.length ? 'UNKNOWN' : 'DETECTING');
+      setScanMessage(benchmarkMode
+        ? benchmarkReady ? 'BENCHMARK MODE — IDENTITY + LIVENESS READY; ATTENDANCE NOT SAVED' : securityPending ? 'Verifikasi keamanan...' : verifying ? 'Memverifikasi wajah...' : result.faces.length ? 'Wajah belum dikenali. Mencoba kembali...' : 'Menunggu siswa...'
+        : recorded.length ? `${recorded.length} presensi berhasil dicatat.` : failed ? result.faces.find((face) => face.message)?.message ?? 'Sebagian presensi gagal dicatat. Mencoba kembali...' : duplicate ? 'Presensi sudah tercatat.' : result.livenessMode === 'MANUAL_ONLY' ? 'Presensi otomatis dinonaktifkan. Gunakan verifikasi manual oleh petugas.' : result.faces.some((face) => face.liveness === 'SPOOF_SUSPECTED') ? 'Perlu pemeriksaan petugas.' : securityPending ? 'Verifikasi keamanan...' : verifying ? 'Memverifikasi wajah...' : result.faces.length ? 'Wajah belum dikenali. Mencoba kembali...' : 'Menunggu siswa...');
       for (const item of recorded) {
         addRecentDetection(fromScanAttendance(item));
       }
-      return { delayMs: SCAN_INTERVAL_MS, holdResult: false };
+      return { delayMs: defaultDelay, holdResult: false };
     } catch (error) {
-      if (controller.signal.aborted || !mountedRef.current) return { delayMs: SCAN_INTERVAL_MS, holdResult: false };
+      if (controller.signal.aborted || !mountedRef.current) {
+        if (controller.signal.aborted) {
+          setScanState('ERROR');
+          setScanMessage('Pemindaian dibatalkan karena waktu tunggu habis atau dibersihkan.');
+        }
+        return { delayMs: 1200, holdResult: controller.signal.aborted };
+      }
       if (error instanceof ApiError && error.telemetry) {
         const telemetry = error.telemetry as unknown as FaceScanTelemetry;
         setLastTelemetry(telemetry);
-        const backendTotalMs = telemetry.timings_ms?.total;
-        if (typeof backendTotalMs === 'number' && Number.isFinite(backendTotalMs)) setLastLatencyMs(backendTotalMs);
       }
       const errorFaces = error instanceof ApiError && Array.isArray(error.data?.faces)
         ? error.data.faces as unknown as TrackedFace[]
@@ -246,21 +335,23 @@ export const TeacherLiveAttendancePage: React.FC = () => {
       } else {
         setFaces([]);
       }
+      const errorHasCandidate = Boolean(errorFaces?.some((face) => face.state === 'TRACKING' || face.state === 'VERIFYING' || face.recognitionStatus === 'RECOGNIZED'));
+      verifyingStateRef.current = nextVisualVerificationState(verifyingStateRef.current.verifying, errorHasCandidate, verifyingStateRef.current.missedFrames);
       const code = error instanceof ApiError ? error.code : undefined;
       const message = scanErrorMessages[code ?? ''] ?? (error instanceof Error ? error.message : 'Scan gagal.');
       if (code === 'DUPLICATE_SCAN' || (error instanceof ApiError && error.status === 409)) {
         networkFailureRef.current = 0; setScanResult(null); if (!errorFaces) setFaces([]); setScanState('DUPLICATE');
         setScanMessage('Presensi sudah tercatat. Tidak ada catatan kedua yang dibuat.');
-        return { delayMs: DUPLICATE_HOLD_MS, holdResult: true };
+        return { delayMs: defaultDelay, holdResult: false };
       }
       if (code === 'UNKNOWN_FACE' || code === 'AMBIGUOUS_FACE') {
         networkFailureRef.current = 0; setScanResult(null); if (!errorFaces) setFaces([]); setScanState('UNKNOWN');
         setScanMessage(code === 'UNKNOWN_FACE' ? 'Pastikan wajah sudah terdaftar dan terlihat dengan jelas.' : message);
-        return { delayMs: UNKNOWN_HOLD_MS, holdResult: true };
+        return { delayMs: defaultDelay, holdResult: false };
       }
       if (code && qualityCodes.has(code)) {
-        networkFailureRef.current = 0; if (!errorFaces) setFaces([]); setScanState('DETECTING'); setScanMessage(message);
-        return { delayMs: SCAN_INTERVAL_MS, holdResult: false };
+        networkFailureRef.current = 0; if (!errorFaces) setFaces([]); setScanState(verifyingStateRef.current.verifying ? 'VERIFYING' : 'DETECTING'); setScanMessage(message);
+        return { delayMs: defaultDelay, holdResult: false };
       }
       if (code === 'SESSION_NOT_ACTIVE') {
         clearScanScheduling(); setSessionId(null); setFaces([]); setScanState('ERROR'); setScanMessage(message);
@@ -275,34 +366,30 @@ export const TeacherLiveAttendancePage: React.FC = () => {
       }
       return { delayMs: Math.max(ERROR_HOLD_MS, Math.min(5000, 2000 * (2 ** Math.max(0, networkFailureRef.current - 1)))), holdResult: true };
     } finally {
+      requestMs = requestStarted ? performance.now() - requestStarted : 0;
+      if (captureMetrics) {
+        setPerformanceMetrics({ ...captureMetrics, requestMs, cycleMs: performance.now() - cycleStarted });
+      }
+      if (scanTimeoutRef.current) { clearTimeout(scanTimeoutRef.current); scanTimeoutRef.current = null; }
       if (scanAbortRef.current === controller) scanAbortRef.current = null;
       scanInFlightRef.current = false;
     }
-  }, [addRecentDetection, clearScanScheduling, sessionId, showBackendNotConnected]);
+  }, [addRecentDetection, benchmarkMode, clearScanScheduling, sessionId, showBackendNotConnected]);
 
   useEffect(() => {
     if (!sessionId || !cameraStream) return;
     let cancelled = false;
     const tick = async () => {
+      const startedAt = performance.now();
+      if (lastScanStartedAtRef.current !== null) setStartToStartMs(startedAt - lastScanStartedAtRef.current);
+      lastScanStartedAtRef.current = startedAt;
       const outcome = await scanFrame();
       if (cancelled || !mountedRef.current || !streamRef.current) return;
-      if (outcome.holdResult) {
-        scanTimerRef.current = setTimeout(() => {
-          if (cancelled || !mountedRef.current || !streamRef.current) return;
-          setScanState('COOLDOWN');
-          setScanMessage('Siap memindai siswa berikutnya...');
-          scanTimerRef.current = setTimeout(() => {
-            if (cancelled || !mountedRef.current || !streamRef.current) return;
-            setScanResult(null);
-            setFaces([]);
-            setScanState('READY');
-            setScanMessage('Posisikan wajah siswa di area kamera.');
-            scanTimerRef.current = setTimeout(tick, 100);
-          }, RESULT_COOLDOWN_MS);
-        }, Math.max(0, outcome.delayMs - RESULT_COOLDOWN_MS));
-      } else {
-        scanTimerRef.current = setTimeout(tick, outcome.delayMs);
-      }
+      const processingMs = performance.now() - startedAt;
+      const delayMs = outcome.holdResult
+        ? outcome.delayMs
+        : nextScanDelayMs(processingMs, { targetPeriodMs: SCAN_TARGET_PERIOD_MS, minimumIdleMs: SCAN_MIN_IDLE_MS });
+      scanTimerRef.current = setTimeout(tick, delayMs);
     };
     scanTimerRef.current = setTimeout(tick, 250);
     return () => { cancelled = true; clearScanScheduling(); };
@@ -328,7 +415,12 @@ export const TeacherLiveAttendancePage: React.FC = () => {
     return () => {
       mountedRef.current = false;
       clearScanScheduling();
+      if (socketCleanupRef.current) {
+        socketCleanupRef.current();
+        socketCleanupRef.current = null;
+      }
       stopMediaStream(streamRef.current);
+      streamRef.current = null;
     };
   }, [clearScanScheduling, openCamera]);
 
@@ -363,7 +455,7 @@ export const TeacherLiveAttendancePage: React.FC = () => {
   const videoOffsetY = (1 - videoScaleY) / 2;
   const stateColor = scanState === 'SUCCESS' ? 'bg-emerald-700 text-white' : scanState === 'DUPLICATE' ? 'bg-amber-100 text-amber-950' : scanState === 'UNKNOWN' ? 'bg-amber-100 text-amber-950' : scanState === 'ERROR' || scanState === 'CAMERA_ERROR' ? 'bg-red-700 text-white' : 'bg-slate-900/85 text-white';
   const modeLabel = activeMode === 'CHECK_IN' ? 'CHECK-IN' : 'CHECK-OUT';
-  const stateTitle = scanState === 'SUCCESS' ? 'Presensi Berhasil' : scanState === 'DUPLICATE' ? 'Presensi Sudah Tercatat' : scanState === 'UNKNOWN' ? 'Wajah Tidak Dikenali' : scanState === 'ERROR' && scanMessage.includes('Layanan pengenalan wajah') ? 'Layanan pengenalan wajah belum siap' : scanState === 'ERROR' ? 'Presensi gagal dicatat' : scanState === 'CAMERA_ERROR' ? 'Kamera tidak tersedia' : scanState === 'PROCESSING' ? 'Memverifikasi wajah...' : scanState === 'DETECTING' ? 'Mendeteksi wajah...' : scanState === 'COOLDOWN' ? 'Siap memindai berikutnya' : scanState === 'READY' ? 'Siap memindai' : 'Menunggu hasil pengenalan';
+  const stateTitle = scanState === 'SUCCESS' ? 'Presensi Berhasil' : scanState === 'DUPLICATE' ? 'Presensi Sudah Tercatat' : scanState === 'UNKNOWN' ? 'Wajah Tidak Dikenali' : scanState === 'ERROR' && scanMessage.includes('Layanan pengenalan wajah') ? 'Layanan pengenalan wajah belum siap' : scanState === 'ERROR' ? 'Presensi gagal dicatat' : scanState === 'CAMERA_ERROR' ? 'Kamera tidak tersedia' : scanState === 'VERIFYING' || scanState === 'PROCESSING' ? 'Memverifikasi wajah...' : scanState === 'DETECTING' ? 'Mendeteksi wajah...' : scanState === 'COOLDOWN' ? 'Siap memindai berikutnya' : scanState === 'READY' ? 'Siap memindai' : 'Menunggu siswa';
 
   return (
     <div className="space-y-6">
@@ -400,9 +492,21 @@ export const TeacherLiveAttendancePage: React.FC = () => {
             {cameraStream && faces.map((face, index) => {
               const box = face.faceBox;
               if (!box) return null;
+              const trackKey = face.trackId ?? `i-${index}`;
+              const rawLeft = videoOffsetX + (mirrored ? 1 - box.x - box.width : box.x) * videoScaleX;
+              const rawTop = videoOffsetY + box.y * videoScaleY;
+              const rawWidth = box.width * videoScaleX;
+              const rawHeight = box.height * videoScaleY;
+              const prev = smoothedBoxesRef.current.get(trackKey);
+              const alpha = BOX_SMOOTH_ALPHA;
+              const left = prev ? Math.max(0, Math.min(1, prev.left * (1 - alpha) + rawLeft * alpha)) : rawLeft;
+              const top = prev ? Math.max(0, Math.min(1, prev.top * (1 - alpha) + rawTop * alpha)) : rawTop;
+              const width = prev ? Math.max(0.001, Math.min(1, prev.width * (1 - alpha) + rawWidth * alpha)) : rawWidth;
+              const height = prev ? Math.max(0.001, Math.min(1, prev.height * (1 - alpha) + rawHeight * alpha)) : rawHeight;
+              smoothedBoxesRef.current.set(trackKey, { left, top, width, height });
               const accepted = (face.state === 'VERIFIED' || face.state === 'ATTENDED') && face.liveness === 'LIVE';
-              return <div key={face.trackId ?? index} className={`absolute border-2 rounded-lg pointer-events-none transition-all duration-150 ${accepted ? 'border-emerald-400' : 'border-amber-400'}`} style={{ left: `${(videoOffsetX + (mirrored ? 1 - box.x - box.width : box.x) * videoScaleX) * 100}%`, top: `${(videoOffsetY + box.y * videoScaleY) * 100}%`, width: `${box.width * videoScaleX * 100}%`, height: `${box.height * videoScaleY * 100}%` }}>
-                <span className="absolute left-0 top-0 rounded bg-slate-950/80 px-1 py-0.5 text-[11px] text-white whitespace-nowrap">{accepted && face.studentName ? `${face.studentName} - ` : ''}{faceLabel(face)}{import.meta.env.DEV && face.trackId !== null && ` | #${face.trackId} | ${face.evidenceCount} | ${face.liveness} | ${face.quality ?? '-'} | ${face.similarity?.toFixed(2) ?? '-'}` }</span>
+              return <div key={trackKey} className={`absolute border-2 rounded-lg pointer-events-none ${accepted ? 'border-emerald-400' : 'border-amber-400'}`} style={{ left: `${left * 100}%`, top: `${top * 100}%`, width: `${width * 100}%`, height: `${height * 100}%` }}>
+                <span className="absolute left-0 top-0 rounded bg-slate-950/80 px-1 py-0.5 text-[11px] text-white whitespace-nowrap">{accepted && face.studentName ? `${face.studentName} - ` : ''}{faceLabel(face)}</span>
               </div>;
             })}
             <div className={`absolute left-3 right-3 bottom-3 px-3 py-2 rounded-lg text-xs font-semibold text-center ${stateColor}`} aria-live="polite">{scanMessage}</div>
@@ -417,33 +521,15 @@ export const TeacherLiveAttendancePage: React.FC = () => {
           <div className="mt-4 pt-3 border-t border-slate-100 text-[11px] text-slate-500 space-y-1">
             <p>Status: {scanState}</p>
             {import.meta.env.DEV && lastLatencyMs !== null && <p>Latency HTTP terakhir: {lastLatencyMs.toFixed(0)} ms</p>}
-            {import.meta.env.DEV && lastTelemetry && (
-              <div className="mt-2 p-2 bg-slate-50 rounded border border-slate-200 font-mono text-[10px] space-y-0.5 text-slate-600">
-                <p className="font-semibold text-slate-700">Debug Telemetry:</p>
-                <p>Liveness: {lastTelemetry.liveness_state ?? '-'} / {lastTelemetry.verification_path ?? '-'}</p>
-                <p>Verification: {lastTelemetry.verification_latency_ms?.toFixed(0) ?? '-'} ms</p>
-                <p>Detection ? attendance: {lastTelemetry.detection_to_attendance_ms?.toFixed(0) ?? '-'} ms</p>
-                <p>Total frame: {lastTelemetry.frame_total_ms?.toFixed(0) ?? '-'} ms</p>
-                {lastTelemetry.frame_size_px && <p>Frame: {lastTelemetry.frame_size_px.width}x{lastTelemetry.frame_size_px.height}</p>}
-                {lastTelemetry.bbox_size_px && <p>BBox: {lastTelemetry.bbox_size_px.width}x{lastTelemetry.bbox_size_px.height} px</p>}
-                {lastTelemetry.detection_count !== undefined && <p>Detection: {lastTelemetry.detection_count}</p>}
-                {lastTelemetry.detection_confidence !== undefined && <p>Det Conf: {(lastTelemetry.detection_confidence * 100).toFixed(1)}%</p>}
-                {lastTelemetry.quality_status && <p>Quality: {lastTelemetry.quality_status}</p>}
-                {lastTelemetry.recognition_status && <p>Recognition: {lastTelemetry.recognition_status === 'RECOGNIZED' ? `MATCHED · ID ${lastTelemetry.candidate_id ?? '—'}` : lastTelemetry.recognition_status === 'UNKNOWN_FACE' ? 'UNKNOWN' : lastTelemetry.recognition_status}</p>}
-                {lastTelemetry.candidate_count !== undefined && <p>Enrolled candidates: {lastTelemetry.candidate_count}</p>}
-                {lastTelemetry.sharpness_metric !== undefined && <p>Sharpness: {lastTelemetry.sharpness_metric.toFixed(1)}</p>}
-                {lastTelemetry.recognition_similarity !== null && lastTelemetry.recognition_similarity !== undefined && (
-                  <p>Similarity: {lastTelemetry.recognition_similarity.toFixed(3)}</p>
-                )}
-                {lastTelemetry.second_best_similarity !== null && lastTelemetry.second_best_similarity !== undefined && (
-                  <p>Second candidate: {lastTelemetry.second_best_similarity.toFixed(3)}</p>
-                )}
-                {lastTelemetry.ambiguity_margin !== null && lastTelemetry.ambiguity_margin !== undefined && (
-                  <p>Ambiguity Margin: {lastTelemetry.ambiguity_margin.toFixed(3)}</p>
-                )}
-                {lastTelemetry.timings_ms && <p>Latency D/R/T: {lastTelemetry.timings_ms.detection?.toFixed(1) ?? '-'} / {((lastTelemetry.timings_ms.embedding ?? 0) + (lastTelemetry.timings_ms.matching ?? 0)).toFixed(1)} / {lastTelemetry.timings_ms.total?.toFixed(1) ?? '-'} ms</p>}
-              </div>
-            )}
+            {import.meta.env.DEV && <p>Target start interval: {SCAN_TARGET_PERIOD_MS} ms · minimum idle: {SCAN_MIN_IDLE_MS} ms</p>}
+            {import.meta.env.DEV && <p>PERFORMANCE {benchmarkMode ? '· BENCHMARK MODE — ATTENDANCE NOT SAVED' : ''}</p>}
+            {import.meta.env.DEV && performanceMetrics && <div className="font-mono text-[10px] space-y-0.5">
+              <p>Scan rate {startToStartMs ? scanRatePerSecond(startToStartMs).toFixed(2) : '—'} /s · cycle {performanceMetrics.cycleMs.toFixed(0)} ms · start interval {startToStartMs?.toFixed(0) ?? '—'} ms</p>
+              <p>Capture {performanceMetrics.captureMs.toFixed(1)} ms · encode {performanceMetrics.encodeMs.toFixed(1)} ms · request {performanceMetrics.requestMs.toFixed(1)} ms</p>
+              <p>Backend {lastTelemetry?.backend_total_ms?.toFixed(1) ?? '—'} ms · detector {lastTelemetry?.timings_ms?.detection?.toFixed(1) ?? '—'} ms · SFace {lastTelemetry?.timings_ms?.embedding?.toFixed(1) ?? '—'} ms</p>
+              <p>Blob {performanceMetrics.blobBytes} bytes · source {performanceMetrics.sourceWidth}×{performanceMetrics.sourceHeight} · sent {performanceMetrics.submittedWidth}×{performanceMetrics.submittedHeight}</p>
+              <p>Faces {lastTelemetry?.detection_count ?? faces.length} · track {faces.find((face) => face.trackId !== null)?.trackId ?? '—'} · evidence {faces.find((face) => face.trackId !== null)?.evidenceCount ?? '—'} · liveness {faces.find((face) => face.trackId !== null)?.liveness ?? '—'}</p>
+            </div>}
           </div>
         </aside>
       </div>
