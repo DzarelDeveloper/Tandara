@@ -28,6 +28,7 @@ export interface FaceScanResult {
   nis: string;
   className: string;
   mode: AttendanceType;
+  status: string;
   method: 'FACE';
   similarity: number;
   faceBox: { x: number; y: number; width: number; height: number } | null;

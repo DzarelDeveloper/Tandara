@@ -5,6 +5,15 @@ function Write-TandaraStatus {
     Write-Host ("[{0}] {1}" -f $Level, $Message)
 }
 
+function Initialize-TandaraNodePath {
+    $nodeDirectory = Join-Path $env:ProgramFiles 'nodejs'
+    if ((Test-Path (Join-Path $nodeDirectory 'node.exe')) -and
+        (Test-Path (Join-Path $nodeDirectory 'npm.cmd')) -and
+        -not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
+        $env:Path = "$nodeDirectory;$env:Path"
+    }
+}
+
 function Get-TandaraHealth {
     try {
         $health = Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/health' -TimeoutSec 2
@@ -23,7 +32,7 @@ function Get-TandaraHealth {
 
 function Test-TandaraFrontend {
     try {
-        $response = Invoke-WebRequest -Uri 'http://localhost:3000' -UseBasicParsing -TimeoutSec 2
+        $response = Invoke-WebRequest -Uri 'http://127.0.0.1:3000' -UseBasicParsing -TimeoutSec 2
         return ($response.StatusCode -eq 200 -and $response.Content -match 'Tandara')
     } catch { return $false }
 }
