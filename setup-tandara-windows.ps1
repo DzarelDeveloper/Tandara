@@ -57,7 +57,9 @@ $pythonVersionArgs = @($python.Prefix) + @('--version')
 Write-TandaraStatus 'OK' (& $python.File @pythonVersionArgs 2>&1)
 
 if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) { Install-WithWinget 'OpenJS.NodeJS.LTS' 'Node.js LTS' }
+Initialize-TandaraNodePath
 if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) { Refresh-ProcessPath }
+Initialize-TandaraNodePath
 if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) { throw 'npm tidak ditemukan setelah instalasi Node.js.' }
 Write-TandaraStatus 'OK' "Node.js $(& node.exe --version)"
 Write-TandaraStatus 'OK' "npm $(& npm.cmd --version)"
