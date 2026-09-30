@@ -17,7 +17,10 @@ _scan_cooldowns: dict[tuple[int, int, str], float] = {}
 _scan_lock = Lock()
 
 
-def fail(c,m,code='REQUEST_ERROR'):raise HTTPException(c,{'success':False,'message':m,'errors':{},'code':code})
+def fail(c,m,code='REQUEST_ERROR',telemetry=None):
+ detail={'success':False,'message':m,'errors':{},'code':code}
+ if settings.app_env!='production' and telemetry:detail['telemetry']=telemetry
+ raise HTTPException(c,detail)
 def take(db,student_id,mode,method,user,confidence=None,notes=None):
  s=db.get(Student,student_id)
  if not s or not s.is_active:fail(404,'Siswa aktif tidak ditemukan.')
@@ -57,76 +60,130 @@ async def scan(session_id: int = Form(...), image: UploadFile = File(...), db: S
   if not content or len(content) > settings.max_upload_mb * 1024 * 1024:
     fail(413 if content else 422, 'Ukuran gambar tidak valid.', 'IMAGE_TOO_LARGE' if content else 'INVALID_IMAGE')
 
-  result = face_recognition_service.recognize_image(content, db)
-  if result.status != 'RECOGNIZED' or result.student_id is None:
+  results = face_recognition_service.recognize_image_many(content, db, session_id=session.id)
+  if len(results) == 1 and (results[0].status != 'RECOGNIZED' or results[0].student_id is None):
+    result = results[0]
     logger.info('Face scan rejected status=%s total_ms=%.2f', result.status, result.timings_ms.get('total', 0.0))
     messages = {
       'UNKNOWN_FACE': 'Wajah tidak dikenali.',
-      'AMBIGUOUS_FACE': 'Identitas wajah belum cukup meyakinkan.',
+      'AMBIGUOUS_FACE': 'Identitas belum yakin. Mencoba kembali...',
       'FACE_NOT_DETECTED': 'Wajah belum terdeteksi.',
       'MULTIPLE_FACES': 'Pastikan hanya satu orang di depan kamera.',
-      'FACE_TOO_BLURRY': 'Gambar terlalu buram.',
+      'FACE_TOO_BLURRY': 'Wajah kurang jelas. Tahan posisi sebentar.',
+      'FACE_BAD_POSE': 'Hadapkan wajah langsung ke kamera.',
+      'FACE_LOW_CONFIDENCE': 'Posisikan wajah lebih jelas di depan kamera.',
       'FACE_TOO_DARK': 'Pencahayaan terlalu gelap.',
       'FACE_TOO_BRIGHT': 'Pencahayaan terlalu terang.',
-      'FACE_TOO_SMALL': 'Dekatkan wajah ke kamera.',
-      'FACE_OUT_OF_FRAME': 'Posisikan wajah sepenuhnya di dalam frame.',
+      'FACE_TOO_SMALL': 'Wajah terlalu kecil. Mendekat sedikit ke kamera.',
+      'FACE_OUT_OF_FRAME': 'Posisikan seluruh wajah di dalam frame.',
       'NO_ENROLLED_FACES': 'Belum ada wajah siswa yang terdaftar.',
       'ENGINE_NOT_READY': 'Mesin pengenalan wajah belum siap.',
       'INVALID_IMAGE': 'File gambar tidak valid.',
     }
     status_code = 503 if result.status in ('ENGINE_NOT_READY', 'NO_ENROLLED_FACES') else 422
-    fail(status_code, messages.get(result.status, 'Pengenalan wajah gagal.'), result.status)
+    fail(status_code, messages.get(result.status, 'Pengenalan wajah gagal.'), result.status, telemetry=result.telemetry)
 
-  key = (result.student_id, session.id, session.mode)
-  with _scan_lock:
-    now = time.monotonic()
-    cooldown = max(0, settings.face_scan_cooldown_seconds)
-    _scan_cooldowns.update({k: v for k, v in list(_scan_cooldowns.items()) if now - v < max(cooldown, 60)})
-    if key in _scan_cooldowns and now - _scan_cooldowns[key] < cooldown:
-      fail(409, 'Wajah baru saja dipindai.', 'DUPLICATE_SCAN')
+  faces_payload = []
+  attendance_records = []
+  legacy_result = None
+
+  for result in results:
+    face_payload = {
+      'trackId': result.track_id,
+      'status': result.status,
+      'faceBox': result.face_box,
+      'similarity': result.similarity,
+    }
+    if settings.app_env != 'production' and result.telemetry:
+      face_payload['telemetry'] = result.telemetry
+
+    if result.status != 'RECOGNIZED' or result.student_id is None:
+      faces_payload.append(face_payload)
+      continue
+
+    student = db.get(Student, result.student_id)
+    if not student or not student.is_active:
+      face_payload.update({'status': 'STUDENT_INACTIVE', 'attendanceStatus': 'NOT_RECORDED'})
+      faces_payload.append(face_payload)
+      continue
+
+    key = (result.student_id, session.id, session.mode)
+    with _scan_lock:
+      now = time.monotonic()
+      cooldown = max(0, settings.face_scan_cooldown_seconds)
+      _scan_cooldowns.update({k: v for k, v in list(_scan_cooldowns.items()) if now - v < max(cooldown, 60)})
+      tracker = face_recognition_service._trackers.get(session.id)
+      track = tracker.get_track(result.track_id) if tracker and result.track_id is not None else None
+      duplicate = bool(track and track.attendance_attempted) or (key in _scan_cooldowns and now - _scan_cooldowns[key] < cooldown)
+      attendance_record = None
+      notifications = []
+      if not duplicate:
+        try:
+          attendance_record = take(db, result.student_id, session.mode, 'FACE', u)
+          notifications = notification_service.attendance_transition(db, attendance_record, session.mode)
+          audit(db, u, 'SCAN', 'Attendance', attendance_record.id, 'Absensi wajah')
+          db.commit()
+          _scan_cooldowns[key] = time.monotonic()
+        except HTTPException as exc:
+          db.rollback()
+          if exc.status_code == 409:
+            duplicate = True
+          else:
+            face_payload.update({'status': 'ATTENDANCE_ERROR', 'attendanceStatus': 'NOT_RECORDED'})
+        except Exception:
+          db.rollback()
+          logger.exception('Attendance transaction failed for student_id=%s', result.student_id)
+          face_payload.update({'status': 'ATTENDANCE_ERROR', 'attendanceStatus': 'NOT_RECORDED'})
+      if (duplicate or attendance_record is not None) and result.track_id is not None:
+        face_recognition_service.mark_attendance_attempted(session.id, result.track_id)
+
+    if duplicate:
+      face_payload.update({'status': 'DUPLICATE_SCAN', 'attendanceStatus': 'ALREADY_RECORDED'})
+      faces_payload.append(face_payload)
+      continue
+    if attendance_record is None:
+      faces_payload.append(face_payload)
+      continue
+
+    data = attendance_out(attendance_record)
+    data.update({'mode': session.mode, 'method': 'FACE', 'similarity': result.similarity, 'faceBox': result.face_box, 'recordedAt': localnow().isoformat()})
+    if settings.app_env != 'production' and result.telemetry:
+      data['telemetry'] = result.telemetry
+    face_payload.update({
+      'attendanceStatus': 'RECORDED',
+      'studentId': str(attendance_record.student_id),
+      'studentName': attendance_record.student.full_name,
+      'nis': attendance_record.student.nis,
+      'className': attendance_record.student.classroom.name,
+      'attendance': data,
+    })
+    faces_payload.append(face_payload)
+    attendance_records.append(data)
+    if legacy_result is None:
+      legacy_result = data
+
+    event = {
+      'student_id': attendance_record.student_id,
+      'student_name': attendance_record.student.full_name,
+      'nis': attendance_record.student.nis,
+      'class_name': attendance_record.student.classroom.name,
+      'mode': session.mode,
+      'confidence': None,
+      'similarity': result.similarity,
+      'method': 'FACE',
+      'track_id': result.track_id,
+    }
     try:
-      attendance_record = take(db, result.student_id, session.mode, 'FACE', u)
-      notifications = notification_service.attendance_transition(db, attendance_record, session.mode)
-      audit(db, u, 'SCAN', 'Attendance', attendance_record.id, 'Absensi wajah')
-      db.commit()
-    except HTTPException as exc:
-      db.rollback()
-      if exc.status_code == 409:
-        fail(409, 'Wajah sudah dipindai untuk mode sesi ini.', 'DUPLICATE_SCAN')
-      raise
+      await broadcast('ATTENDANCE_SUCCESS', event)
     except Exception:
-      db.rollback()
-      raise
-    _scan_cooldowns[key] = time.monotonic()
+      logger.exception('Attendance committed but scan broadcast failed for student_id=%s', attendance_record.student_id)
+    await publish_parent_notifications(notifications)
 
-  data = attendance_out(attendance_record)
-  data.update({'mode': session.mode, 'method': 'FACE', 'similarity': result.similarity, 'faceBox': result.face_box, 'recordedAt': localnow().isoformat()})
-  event = {
-    'student_id': attendance_record.student_id,
-    'student_name': attendance_record.student.full_name,
-    'nis': attendance_record.student.nis,
-    'class_name': attendance_record.student.classroom.name,
-    'mode': session.mode,
-    'confidence': None,
-    'similarity': result.similarity,
-    'method': 'FACE',
-  }
-  try:
-    await broadcast('ATTENDANCE_SUCCESS', event)
-  except Exception:
-    logger.exception('Attendance committed but scan broadcast failed for student_id=%s', attendance_record.student_id)
-  await publish_parent_notifications(notifications)
-  logger.info(
-    'Face scan recorded student_id=%s mode=%s index_ms=%.2f detection_ms=%.2f embedding_ms=%.2f matching_ms=%.2f total_ms=%.2f',
-    attendance_record.student_id,
-    session.mode,
-    result.timings_ms.get('index', 0.0),
-    result.timings_ms.get('detection', 0.0),
-    result.timings_ms.get('embedding', 0.0),
-    result.timings_ms.get('matching', 0.0),
-    result.timings_ms.get('total', 0.0),
-  )
-  return {'success': True, 'data': data}
+  if legacy_result is not None:
+    response_data = {**legacy_result, 'faces': faces_payload, 'attendances': attendance_records}
+  else:
+    response_data = {'faces': faces_payload, 'attendances': attendance_records}
+  return {'success': True, 'data': response_data}
 @router.get('/api/attendance')
 def attendance(today:bool=False,date_from:date|None=None,date_to:date|None=None,status:str|None=None,db:Session=Depends(get_db),u=Depends(user_dep)):
  q=select(Attendance).order_by(Attendance.attendance_date.desc())

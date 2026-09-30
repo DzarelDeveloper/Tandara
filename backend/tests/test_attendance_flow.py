@@ -5,7 +5,7 @@ from app.database import SessionLocal
 from app.models import User, ClassRoom, Student
 
 
-def test_admin_can_open_session_and_record_manual_attendance():
+def test_admin_can_open_session_and_record_manual_attendance(attendance_clock):
     db = SessionLocal()
     admin = User(full_name='Admin Test', username='admin-test', password_hash=PasswordHasher().hash('password-aman'), role='ADMIN_IT')
     classroom = ClassRoom(name='X-A', grade='10', major='Umum', school_year='2026')

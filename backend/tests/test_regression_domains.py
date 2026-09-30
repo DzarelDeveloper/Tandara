@@ -117,10 +117,11 @@ def test_attendance_sessions_and_audits(client, actors, headers):
     assert client.post(f'/api/attendance-sessions/{sid}/close', headers=headers['guru']).status_code == 404
 
 
-def test_attendance_state_machine_list_summary_correction(client, actors, headers, student):
+def test_attendance_state_machine_list_summary_correction(client, actors, headers, student, attendance_clock):
     out = client.post('/api/attendance/manual', headers=headers['guru'], json={'student_id': student, 'mode': 'CHECK_OUT', 'reason': 'test reason'}); assert out.status_code == 422
     checkin = client.post('/api/attendance/manual', headers=headers['guru'], json={'student_id': student, 'mode': 'CHECK_IN', 'reason': 'test reason'}); assert checkin.status_code == 200; aid = checkin.json()['data']['id']
     assert client.post('/api/attendance/manual', headers=headers['guru'], json={'student_id': student, 'mode': 'CHECK_IN', 'reason': 'again'}).status_code == 409
+    attendance_clock('15:30:00')
     assert client.post('/api/attendance/manual', headers=headers['guru'], json={'student_id': student, 'mode': 'CHECK_OUT', 'reason': 'checkout'}).status_code == 200
     assert client.get('/api/attendance', headers=headers['guru'], params={'date_from': date.today().isoformat(), 'date_to': date.today().isoformat()}).status_code == 200
     assert client.get('/api/attendance', headers=headers['guru'], params={'date_from': 'bad'}).status_code == 422

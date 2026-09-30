@@ -3,6 +3,14 @@ from sqlalchemy import String, Integer, Boolean, Date, DateTime, Float, ForeignK
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 def now(): return datetime.now()
+class AttendanceSchedule(Base):
+    __tablename__ = 'attendance_schedule'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    check_in_deadline: Mapped[str] = mapped_column(String(5), default='07:00')
+    check_out_start: Mapped[str] = mapped_column(String(5), default='15:30')
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey('users.id'), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
+
 class User(Base):
     __tablename__='users'; id: Mapped[int]=mapped_column(primary_key=True); full_name: Mapped[str]=mapped_column(String(120)); username: Mapped[str]=mapped_column(String(60), unique=True, index=True); password_hash: Mapped[str]=mapped_column(String(255)); role: Mapped[str]=mapped_column(String(20)); is_active: Mapped[bool]=mapped_column(Boolean, default=True); last_login_at: Mapped[datetime|None]=mapped_column(DateTime, nullable=True); created_at: Mapped[datetime]=mapped_column(DateTime, default=now); updated_at: Mapped[datetime]=mapped_column(DateTime, default=now, onupdate=now)
 class ClassRoom(Base):

@@ -16,12 +16,14 @@ export class BackendDisconnectedError extends Error {
 export class ApiError extends Error {
   code?: string;
   status: number;
+  telemetry?: Record<string, unknown>;
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(message: string, status: number, code?: string, telemetry?: Record<string, unknown>) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.telemetry = telemetry;
   }
 }
 
@@ -48,7 +50,8 @@ export async function apiRequest<T>(
       const errorData = await response.json().catch(() => ({}));
       const detail = errorData?.detail;
       const message = errorData?.message || (typeof detail === 'object' ? detail.message : detail) || (response.status === 401 ? 'Sesi login tidak valid atau telah berakhir.' : response.status === 403 ? 'Anda tidak memiliki izin untuk aksi ini.' : `HTTP Error ${response.status}`);
-      throw new ApiError(message, response.status, errorData?.code || detail?.code);
+      const telemetry = errorData?.telemetry || (typeof detail === 'object' ? detail?.telemetry : undefined);
+      throw new ApiError(message, response.status, errorData?.code || detail?.code, telemetry);
     }
 
     const payload = await response.json();
@@ -71,7 +74,8 @@ export async function apiRequestBlob(endpoint: string, options: RequestInit = {}
       const errorData = await response.json().catch(() => ({}));
       const detail = errorData?.detail;
       const message = errorData?.message || (typeof detail === 'object' ? detail.message : detail) || (response.status === 401 ? 'Sesi login tidak valid atau telah berakhir.' : response.status === 403 ? 'Anda tidak memiliki izin untuk aksi ini.' : `HTTP Error ${response.status}`);
-      throw new ApiError(message, response.status, errorData?.code || detail?.code);
+      const telemetry = errorData?.telemetry || (typeof detail === 'object' ? detail?.telemetry : undefined);
+      throw new ApiError(message, response.status, errorData?.code || detail?.code, telemetry);
     }
     return response;
   } catch (err: unknown) {

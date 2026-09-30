@@ -41,7 +41,7 @@ def login_parent(client, username):
     return {'Authorization': f"Bearer {response.json()['data']['access_token']}"}
 
 
-def test_parent_dashboard_attendance_and_student_idor(client, headers, classroom):
+def test_parent_dashboard_attendance_and_student_idor(client, headers, classroom, attendance_clock):
     ids = create_parent_fixture_data(classroom)
     parent_headers = login_parent(client, 'parent-a.test')
 
@@ -71,7 +71,7 @@ def test_parent_dashboard_attendance_and_student_idor(client, headers, classroom
     assert invalid_range.status_code == 422 and invalid_range.json()['code'] == 'INVALID_DATE_RANGE'
 
 
-def test_attendance_notifications_are_persisted_per_parent_and_read_state(client, headers, classroom):
+def test_attendance_notifications_are_persisted_per_parent_and_read_state(client, headers, classroom, attendance_clock):
     ids = create_parent_fixture_data(classroom)
     parent_a_headers = login_parent(client, 'parent-a.test')
     parent_b_headers = login_parent(client, 'parent-b.test')
@@ -81,6 +81,7 @@ def test_attendance_notifications_are_persisted_per_parent_and_read_state(client
         'student_id': ids['student'], 'mode': 'CHECK_IN', 'reason': 'notification test',
     })
     assert checkin.status_code == 200
+    attendance_clock('15:30:00')
     checkout = client.post('/api/attendance/manual', headers=headers['admin'], json={
         'student_id': ids['student'], 'mode': 'CHECK_OUT', 'reason': 'notification test',
     })

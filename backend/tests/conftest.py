@@ -1,12 +1,14 @@
 import sys
 import os
+from tempfile import TemporaryDirectory
 from pathlib import Path
 import pytest
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-os.environ['DATABASE_URL'] = f"sqlite:///{Path(__file__).resolve().parents[1] / 'data' / 'tandara_test.db'}"
+_test_database_directory = TemporaryDirectory(prefix='tandara-pytest-', ignore_cleanup_errors=True)
+os.environ['DATABASE_URL'] = f"sqlite:///{Path(_test_database_directory.name) / 'test.db'}"
 os.environ['SECRET_KEY'] = 'test-secret-key-for-tandara-security-hardening-2026'
 
 from app.database import Base, engine, SessionLocal
@@ -22,6 +24,7 @@ def clean_test_database():
     yield
     engine.dispose()
     Base.metadata.drop_all(engine)
+    engine.dispose()
 
 
 @pytest.fixture
@@ -63,3 +66,15 @@ def guardian():
 @pytest.fixture
 def student(classroom, guardian):
     db = SessionLocal(); row = Student(nis='TEST-001', full_name='Siswa Test', class_id=classroom, guardian_id=guardian, gender='L'); db.add(row); db.commit(); result = row.id; db.close(); return result
+
+
+@pytest.fixture
+def attendance_clock(monkeypatch):
+    from datetime import datetime, time
+    import app.routers.attendance as router
+    today = router.localnow().date()
+    def set_clock(value):
+        fixed = datetime.combine(today, time.fromisoformat(value))
+        monkeypatch.setattr(router, 'localnow', lambda: fixed)
+    set_clock('06:45:00')
+    return set_clock

@@ -1,8 +1,8 @@
 export const CAMERA_STORAGE_KEY = 'tandara_camera_device_id';
 
 export const CAMERA_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
-  width: { ideal: 1280 },
-  height: { ideal: 720 },
+  width: { ideal: 1920 },
+  height: { ideal: 1080 },
   frameRate: { ideal: 20, max: 24 },
 };
 

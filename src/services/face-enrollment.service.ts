@@ -12,6 +12,7 @@ export interface FaceSampleResult {
   sampleCount: number;
   minimumSamples: number;
   valid: boolean;
+  guidance?: string;
 }
 
 export const faceEnrollmentService = {

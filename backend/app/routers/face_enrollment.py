@@ -116,9 +116,17 @@ async def add_sample(student_id: int, image: UploadFile, db: Session = Depends(g
         error(422, 'Wajah belum terdeteksi.', 'FACE_NOT_DETECTED')
     if len(faces) > 1:
         error(422, 'Pastikan hanya satu wajah di dalam frame.', 'MULTIPLE_FACES')
-    quality_error = face_engine.validate_face_quality(frame, faces[0])
+    quality_error = face_engine.validate_face_quality(frame, faces[0], for_enrollment=True)
     if quality_error:
-        messages = {'FACE_TOO_SMALL': 'Dekatkan wajah ke kamera.', 'FACE_OUT_OF_FRAME': 'Posisikan wajah sepenuhnya di dalam frame.', 'FACE_TOO_BLURRY': 'Gambar terlalu buram.', 'FACE_TOO_DARK': 'Pencahayaan terlalu gelap.', 'FACE_TOO_BRIGHT': 'Pencahayaan terlalu terang.'}
+        messages = {
+            'FACE_TOO_SMALL': 'Posisikan wajah sedikit lebih dekat atau jelas di depan kamera.',
+            'FACE_OUT_OF_FRAME': 'Posisikan seluruh wajah di dalam frame.',
+            'FACE_TOO_BLURRY': 'Gambar terlalu buram. Tahan posisi dan coba lagi.',
+            'FACE_BAD_POSE': 'Hadapkan wajah langsung ke kamera.',
+            'FACE_LOW_CONFIDENCE': 'Posisikan wajah lebih jelas di depan kamera.',
+            'FACE_TOO_DARK': 'Pencahayaan terlalu gelap.',
+            'FACE_TOO_BRIGHT': 'Pencahayaan terlalu terang.',
+        }
         error(422, messages.get(quality_error, 'Kualitas wajah tidak memenuhi syarat.'), quality_error)
     embedding = face_engine.extract_embedding(frame, faces[0])
     samples = [np.load(path, allow_pickle=False) for path in _sample_files(student_id)]
@@ -126,7 +134,14 @@ async def add_sample(student_id: int, image: UploadFile, db: Session = Depends(g
         error(422, 'Sampel wajah tidak konsisten.', 'SAMPLE_IDENTITY_MISMATCH')
     sample_path = _pending_dir(student_id) / f'sample-{len(samples) + 1:02d}.npy'
     _save_embedding(sample_path, embedding)
-    return {'success': True, 'data': {'studentId': str(student.id), 'sampleCount': len(samples) + 1, 'minimumSamples': settings.face_min_samples, 'valid': True}}
+    sample_num = len(samples) + 1
+    guidances = {
+        1: 'Sampel 1 berhasil. Untuk sampel berikutnya, tengok sedikit ke kiri (~15°).',
+        2: 'Sampel 2 berhasil. Untuk sampel berikutnya, tengok sedikit ke kanan (~15°).',
+        3: '3 sampel terpenuhi. Silakan simpan enrollment wajah.',
+    }
+    next_guidance = guidances.get(sample_num, 'Sampel berhasil disimpan.')
+    return {'success': True, 'data': {'studentId': str(student.id), 'sampleCount': sample_num, 'minimumSamples': settings.face_min_samples, 'valid': True, 'guidance': next_guidance}}
 
 
 @router.post('/api/students/{student_id}/face-enrollment/complete')
@@ -156,8 +171,6 @@ def complete_enrollment(student_id: int, db: Session = Depends(get_db), u=Depend
     audit(db, u, action, 'FaceEnrollment', student_id, 'Menyimpan enrollment wajah')
     db.commit()
     face_recognition_service.invalidate(student_id)
-    if old_path and old_path != final_path:
-        old_path.unlink(missing_ok=True)
     for path in sample_paths:
         path.unlink(missing_ok=True)
     pending = PENDING_ROOT / str(student_id)

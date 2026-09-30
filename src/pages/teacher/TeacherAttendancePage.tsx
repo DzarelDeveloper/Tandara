@@ -3,7 +3,7 @@
  * Route: /teacher/attendance
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   CheckCircle2,
   Clock,
@@ -20,6 +20,7 @@ import { StatusBadge } from '../../components/ui/StatusBadge';
 import { useToast } from '../../context/ToastContext';
 import { AttendanceRecord } from '../../types';
 import { attendanceService } from '../../services/attendance.service';
+import { AttendanceSchedulePanel } from '../../components/teacher/AttendanceSchedulePanel';
 import { CorrectionFormModal } from '../../components/teacher/CorrectionFormModal';
 import { reportsService } from '../../services/reports.service';
 import { classesService } from '../../services/classes.service';
@@ -29,7 +30,7 @@ export const TeacherAttendancePage: React.FC = () => {
   const { showToast } = useToast();
 
   const [search, setSearch] = useState('');
-  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState(() => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date()));
   const [selectedGrade, setSelectedGrade] = useState('');
   const [selectedClass, setSelectedClass] = useState('');
   const [selectedStatus, setSelectedStatus] = useState('');
@@ -37,8 +38,11 @@ export const TeacherAttendancePage: React.FC = () => {
   const [summary, setSummary] = useState({ today: 0, students: 0 });
   const [selectedRecord, setSelectedRecord] = useState<AttendanceRecord | null>(null);
   const [classes, setClasses] = useState<Class[]>([]);
-  const load = () => Promise.all([attendanceService.getAttendanceRecords({ date_from: selectedDate, date_to: selectedDate, ...(selectedStatus ? { status: selectedStatus } : {}) }), attendanceService.getSummary()]).then(([rows, stats]) => { setAttendanceRecords(rows); setSummary(stats); });
-  useEffect(() => { load().catch(() => undefined); }, [selectedDate, selectedStatus]);
+  const load = useCallback(() => Promise.all([attendanceService.getAttendanceRecords({ date_from: selectedDate, date_to: selectedDate, ...(selectedStatus ? { status: selectedStatus } : {}) }), attendanceService.getSummary()]).then(([rows, stats]) => { setAttendanceRecords(rows); setSummary(stats); }), [selectedDate, selectedStatus]);
+  useEffect(() => { load().catch(() => undefined); }, [load]);
+  useEffect(() => attendanceService.subscribe((message) => {
+    if (['ATTENDANCE_SUCCESS', 'ATTENDANCE_CORRECTED', 'ATTENDANCE_SCHEDULE_UPDATED'].includes(message.event)) void load().catch(() => undefined);
+  }), [load]);
   useEffect(() => { classesService.getClasses().then(setClasses).catch(() => setClasses([])); }, []);
 
   const kpis = [
@@ -107,7 +111,7 @@ export const TeacherAttendancePage: React.FC = () => {
 
   const handleResetFilters = () => {
     setSearch('');
-    setSelectedDate(new Date().toISOString().split('T')[0]);
+    setSelectedDate(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date()));
     setSelectedGrade('');
     setSelectedClass('');
     setSelectedStatus('');
@@ -139,6 +143,8 @@ export const TeacherAttendancePage: React.FC = () => {
         }
       />
 
+
+      <AttendanceSchedulePanel onSaved={() => { void load().catch(() => undefined); }} />
 
       {/* KPI Cards (All values '—') */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

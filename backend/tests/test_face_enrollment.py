@@ -15,7 +15,7 @@ from app.models import AuditLog
 def fake_engine(monkeypatch):
     monkeypatch.setattr(face_engine, 'initialize', lambda: FaceEngineStatus.READY)
     monkeypatch.setattr(face_engine, 'detect_faces', lambda frame: [np.array([10, 10, 100, 100, 0.99], dtype=np.float32)])
-    monkeypatch.setattr(face_engine, 'validate_face_quality', lambda frame, face: None)
+    monkeypatch.setattr(face_engine, 'validate_face_quality', lambda frame, face, for_enrollment=False: None)
     monkeypatch.setattr(face_engine, 'extract_embedding', lambda frame, face: np.array([1, 0, 0, 0], dtype=np.float32))
     monkeypatch.setattr(face_router, '_decode_image', lambda content: np.zeros((160, 160, 3), dtype=np.uint8))
     return face_engine
@@ -73,6 +73,16 @@ def test_face_enrollment_invalid_face_code(client, headers, student, fake_engine
     assert response.json()['code'] == 'MULTIPLE_FACES'
 
 
+def test_enrollment_uses_enrollment_quality_profile(client, headers, student, fake_engine, monkeypatch):
+    enrollment_modes = []
+    monkeypatch.setattr(face_engine, 'validate_face_quality', lambda frame, face, for_enrollment=False: enrollment_modes.append(for_enrollment))
+
+    response = upload_sample(client, headers['admin'], student)
+
+    assert response.status_code == 200
+    assert enrollment_modes == [True]
+
+
 def test_reenrollment_and_delete_are_safe(client, headers, student, fake_engine):
     for _ in range(3):
         assert upload_sample(client, headers['admin'], student).status_code == 200
@@ -86,6 +96,22 @@ def test_reenrollment_and_delete_are_safe(client, headers, student, fake_engine)
     assert client.post(f'/api/students/{student}/face-enrollment/samples', headers=headers['admin'], files={'image': ('capture.jpg', b'x', 'text/plain')}).status_code == 422
     assert client.delete(f'/api/students/{student}/face-enrollment', headers=headers['admin']).status_code == 200
     assert client.get(f'/api/students/{student}/face-enrollment', headers=headers['admin']).json()['data']['status'] == 'NOT_REGISTERED'
+
+
+def test_successful_reenrollment_preserves_previous_embedding_file(client, headers, student, fake_engine):
+    for _ in range(settings.face_min_samples):
+        assert upload_sample(client, headers['admin'], student).status_code == 200
+    assert client.post(f'/api/students/{student}/face-enrollment/complete', headers=headers['admin']).status_code == 200
+    old_path = next((face_router.FACE_ROOT / str(student)).glob('embedding-*.npy'))
+    old_embedding = old_path.read_bytes()
+
+    for _ in range(settings.face_min_samples):
+        assert upload_sample(client, headers['admin'], student).status_code == 200
+    assert client.post(f'/api/students/{student}/face-enrollment/complete', headers=headers['admin']).status_code == 200
+
+    assert old_path.exists()
+    assert old_path.read_bytes() == old_embedding
+    assert len(list((face_router.FACE_ROOT / str(student)).glob('embedding-*.npy'))) == 2
 
 
 def test_nonexistent_student_is_rejected(client, headers, fake_engine):
