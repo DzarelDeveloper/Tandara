@@ -221,7 +221,7 @@ export const TeacherLiveAttendancePage: React.FC = () => {
       const recorded = result.attendances;
       setScanResult(recorded[0] ?? null);
       const duplicate = result.faces.some((face) => face.attendanceStatus === 'ALREADY_RECORDED');
-      const failed = result.faces.some((face) => face.status === 'ATTENDANCE_ERROR');
+      const failed = result.faces.some((face) => face.status === 'ATTENDANCE_ERROR' || face.status === 'CHECK_OUT_TOO_EARLY');
       const verifying = result.faces.some((face) => face.state === 'TRACKING' || face.state === 'VERIFYING' || face.liveness === 'LIVENESS_PENDING');
       setScanState(recorded.length ? 'SUCCESS' : failed ? 'ERROR' : duplicate ? 'DUPLICATE' : verifying ? 'PROCESSING' : 'UNKNOWN');
       setScanMessage(recorded.length ? `${recorded.length} presensi berhasil dicatat.` : failed ? result.faces.find((face) => face.message)?.message ?? 'Sebagian presensi gagal dicatat. Mencoba kembali...' : duplicate ? 'Presensi sudah tercatat.' : result.livenessMode === 'MANUAL_ONLY' ? 'Presensi otomatis dinonaktifkan. Gunakan verifikasi manual oleh petugas.' : result.faces.some((face) => face.liveness === 'SPOOF_SUSPECTED') ? 'Perlu pemeriksaan petugas.' : verifying ? 'Memverifikasi wajah...'  : 'Wajah belum dikenali. Mencoba kembali...');
@@ -237,21 +237,29 @@ export const TeacherLiveAttendancePage: React.FC = () => {
         const backendTotalMs = telemetry.timings_ms?.total;
         if (typeof backendTotalMs === 'number' && Number.isFinite(backendTotalMs)) setLastLatencyMs(backendTotalMs);
       }
-      setFaces([]);
+      const errorFaces = error instanceof ApiError && Array.isArray(error.data?.faces)
+        ? error.data.faces as unknown as TrackedFace[]
+        : undefined;
+      if (errorFaces) {
+        setFaces(errorFaces);
+        setManualOnly(error instanceof ApiError && error.data?.livenessMode === 'MANUAL_ONLY');
+      } else {
+        setFaces([]);
+      }
       const code = error instanceof ApiError ? error.code : undefined;
       const message = scanErrorMessages[code ?? ''] ?? (error instanceof Error ? error.message : 'Scan gagal.');
       if (code === 'DUPLICATE_SCAN' || (error instanceof ApiError && error.status === 409)) {
-        networkFailureRef.current = 0; setScanResult(null); setFaces([]); setScanState('DUPLICATE');
+        networkFailureRef.current = 0; setScanResult(null); if (!errorFaces) setFaces([]); setScanState('DUPLICATE');
         setScanMessage('Presensi sudah tercatat. Tidak ada catatan kedua yang dibuat.');
         return { delayMs: DUPLICATE_HOLD_MS, holdResult: true };
       }
       if (code === 'UNKNOWN_FACE' || code === 'AMBIGUOUS_FACE') {
-        networkFailureRef.current = 0; setScanResult(null); setFaces([]); setScanState('UNKNOWN');
+        networkFailureRef.current = 0; setScanResult(null); if (!errorFaces) setFaces([]); setScanState('UNKNOWN');
         setScanMessage(code === 'UNKNOWN_FACE' ? 'Pastikan wajah sudah terdaftar dan terlihat dengan jelas.' : message);
         return { delayMs: UNKNOWN_HOLD_MS, holdResult: true };
       }
       if (code && qualityCodes.has(code)) {
-        networkFailureRef.current = 0; setFaces([]); setScanState('DETECTING'); setScanMessage(message);
+        networkFailureRef.current = 0; if (!errorFaces) setFaces([]); setScanState('DETECTING'); setScanMessage(message);
         return { delayMs: SCAN_INTERVAL_MS, holdResult: false };
       }
       if (code === 'SESSION_NOT_ACTIVE') {

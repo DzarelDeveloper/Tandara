@@ -3,12 +3,15 @@ import time
 from threading import Lock
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from datetime import date
+from datetime import date, time as datetime_time
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field, model_validator
 from ..config import settings
 from ..database import get_db
 from ..main import Attendance, AttendanceSession, ManualIn, Patch, Student, attendance_out, audit, broadcast, localnow, require, user_dep
+from ..models import AttendanceSchedule
+from ..services.attendance_schedule import get_schedule, recalculate_today
 from ..services.face_recognition import face_recognition_service
 from ..services.notifications import notification_service
 router=APIRouter(tags=['Attendance'])
@@ -17,24 +20,68 @@ _scan_cooldowns: dict[tuple[int, int, str], float] = {}
 _scan_lock = Lock()
 
 
-def fail(c,m,code='REQUEST_ERROR',telemetry=None):
+class AttendanceScheduleIn(BaseModel):
+  checkInDeadline: str = Field(pattern=r'^\d{2}:\d{2}$')
+  checkOutStart: str = Field(pattern=r'^\d{2}:\d{2}$')
+
+  @model_validator(mode='after')
+  def validate_times(self):
+    try:
+      check_in = datetime_time.fromisoformat(self.checkInDeadline)
+      check_out = datetime_time.fromisoformat(self.checkOutStart)
+    except ValueError as exc:
+      raise ValueError('Waktu harus menggunakan format HH:MM yang valid.') from exc
+    if check_out <= check_in:
+      raise ValueError('Jam pulang harus setelah batas masuk.')
+    return self
+
+
+def fail(c,m,code='REQUEST_ERROR',telemetry=None,data=None):
  detail={'success':False,'message':m,'errors':{},'code':code}
  if settings.app_env!='production' and telemetry:detail['telemetry']=telemetry
+ if data is not None:detail['data']=data
  raise HTTPException(c,detail)
 def take(db,student_id,mode,method,user,confidence=None,notes=None):
  s=db.get(Student,student_id)
  if not s or not s.is_active:fail(404,'Siswa aktif tidak ditemukan.')
+ schedule=get_schedule(db)
+ now=localnow()
  a=db.scalar(select(Attendance).where(Attendance.student_id==student_id,Attendance.attendance_date==localnow().date()))
  if mode=='CHECK_IN':
   if a and a.check_in_time:fail(409,'Siswa sudah melakukan check-in.')
-  if not a:a=Attendance(student_id=student_id,attendance_date=localnow().date(),status='PRESENT',created_by=user.id);db.add(a)
-  a.check_in_time=localnow();a.check_in_method=method
+  if not a:a=Attendance(student_id=student_id,attendance_date=now.date(),status='PRESENT',created_by=user.id);db.add(a)
+  a.check_in_time=now;a.check_in_method=method
+  a.status='LATE' if now.time()>datetime_time.fromisoformat(schedule['checkInDeadline']) else 'PRESENT'
  elif mode=='CHECK_OUT':
   if not a or not a.check_in_time:fail(422,'Check-out ditolak karena siswa belum check-in.')
   if a.check_out_time:fail(409,'Siswa sudah melakukan check-out.')
-  a.check_out_time=localnow();a.check_out_method=method
+  if now.time()<datetime_time.fromisoformat(schedule['checkOutStart']):fail(422,f"Presensi pulang belum dibuka. Mulai pukul {schedule['checkOutStart']}.",'CHECK_OUT_TOO_EARLY')
+  a.check_out_time=now;a.check_out_method=method
  else:fail(422,'Mode absensi tidak valid.')
  a.confidence_score=confidence or a.confidence_score;a.notes=notes or a.notes;a.updated_by=user.id;db.flush();return a
+
+
+@router.get('/api/attendance/settings')
+def attendance_settings(db:Session=Depends(get_db),u=Depends(user_dep)):
+ return {'success':True,'data':get_schedule(db)}
+
+
+@router.put('/api/attendance/settings')
+async def update_attendance_settings(body:AttendanceScheduleIn,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
+ row=db.get(AttendanceSchedule,1)
+ if row is None:
+  row=AttendanceSchedule(id=1,check_in_deadline=body.checkInDeadline,check_out_start=body.checkOutStart,updated_by=u.id)
+  db.add(row)
+ else:
+  row.check_in_deadline=body.checkInDeadline
+  row.check_out_start=body.checkOutStart
+  row.updated_by=u.id
+ db.flush()
+ updated_count=recalculate_today(db,today=localnow().date(),deadline=body.checkInDeadline,user_id=u.id)
+ db.commit()
+ schedule={**get_schedule(db),'updatedCount':updated_count}
+ await broadcast('ATTENDANCE_SCHEDULE_UPDATED',schedule)
+ return {'success':True,'data':schedule}
 
 
 async def publish_parent_notifications(rows):
@@ -46,7 +93,7 @@ async def publish_parent_notifications(rows):
 
 @router.post('/api/attendance/manual')
 async def manual(body:ManualIn,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
- a=take(db,body.student_id,body.mode,'MANUAL',u,notes=body.reason);notifications=notification_service.attendance_transition(db,a,body.mode);audit(db,u,'MANUAL_ATTENDANCE','Attendance',a.id,body.reason);db.commit();await publish_parent_notifications(notifications);await broadcast('ATTENDANCE_SUCCESS',{'student_id':a.student_id,'student_name':a.student.full_name,'mode':body.mode,'confidence':None});return {'success':True,'data':attendance_out(a)}
+ a=take(db,body.student_id,body.mode,'MANUAL',u,notes=body.reason);notifications=notification_service.attendance_transition(db,a,body.mode);audit(db,u,'MANUAL_ATTENDANCE','Attendance',a.id,body.reason);db.commit();await publish_parent_notifications(notifications);await broadcast('ATTENDANCE_SUCCESS',{'attendance_id':a.id,'recorded_at':localnow().isoformat(),'status':a.status,'student_id':a.student_id,'student_name':a.student.full_name,'nis':a.student.nis,'class_name':a.student.classroom.name,'mode':body.mode,'confidence':None});return {'success':True,'data':attendance_out(a)}
 @router.post('/api/attendance/scan')
 async def scan(session_id: int = Form(...), image: UploadFile = File(...), db: Session = Depends(get_db), u=Depends(require('ADMIN_IT', 'GURU_PIKET'))):
   session = db.get(AttendanceSession, session_id)
@@ -81,7 +128,30 @@ async def scan(session_id: int = Form(...), image: UploadFile = File(...), db: S
       'INVALID_IMAGE': 'File gambar tidak valid.',
     }
     status_code = 503 if result.status in ('ENGINE_NOT_READY', 'NO_ENROLLED_FACES') else 422
-    fail(status_code, messages.get(result.status, 'Pengenalan wajah gagal.'), result.status, telemetry=result.telemetry)
+    tracker = face_recognition_service._trackers.get(session.id)
+    track = tracker.get_track(result.track_id) if tracker and result.track_id is not None else None
+    face_state = track.state if track else result.track_state
+    liveness_state = track.liveness_state if track else result.liveness_state
+    face_payload = {
+      'trackId': result.track_id,
+      'faceBox': result.face_box,
+      'recognitionStatus': result.status,
+      'trackState': face_state,
+      'state': face_state,
+      'livenessState': liveness_state,
+      'liveness': liveness_state,
+      'evidenceCount': track.evidence_count if track else result.evidence_count,
+      'status': result.status,
+      'similarity': result.similarity,
+      'quality': result.telemetry.get('quality_status'),
+      'attendanceStatus': 'NOT_RECORDED',
+      'message': messages.get(result.status, 'Pengenalan wajah gagal.'),
+      'errorCode': result.status,
+    }
+    fail(status_code, messages.get(result.status, 'Pengenalan wajah gagal.'), result.status,
+         telemetry=result.telemetry,
+         data={'livenessMode': 'PASSIVE' if settings.face_liveness_enabled else 'MANUAL_ONLY',
+               'faces': [face_payload], 'attendances': []})
 
   faces_payload = []
   attendance_records = []
@@ -91,13 +161,61 @@ async def scan(session_id: int = Form(...), image: UploadFile = File(...), db: S
     face_payload = {
       'trackId': result.track_id,
       'status': result.status,
+      'recognitionStatus': result.status,
       'faceBox': result.face_box,
       'similarity': result.similarity,
+      'trackState': result.track_state,
+      'state': result.track_state,
+      'livenessState': result.liveness_state,
+      'liveness': result.liveness_state,
+      'evidenceCount': result.evidence_count,
+      'quality': result.telemetry.get('quality_status'),
+      'attendanceStatus': 'NOT_RECORDED',
     }
+    tracker = face_recognition_service._trackers.get(session.id)
+    track = tracker.get_track(result.track_id) if tracker and result.track_id is not None else None
+    if track is not None:
+      face_payload.update({
+        'trackState': track.state,
+        'state': track.state,
+        'livenessState': track.liveness_state,
+        'liveness': track.liveness_state,
+        'evidenceCount': track.evidence_count,
+      })
     if settings.app_env != 'production' and result.telemetry:
       face_payload['telemetry'] = result.telemetry
 
     if result.status != 'RECOGNIZED' or result.student_id is None:
+      faces_payload.append(face_payload)
+      continue
+
+    identity_verified = bool(
+      track
+      and track.verified_student_id == result.student_id
+      and track.state in ('VERIFIED', 'ATTENDED')
+    )
+    if not identity_verified:
+      face_payload.update({
+        'status': 'VERIFYING',
+        'trackState': 'VERIFYING' if not track or track.state == 'TRACKING' else track.state,
+        'state': 'VERIFYING' if not track or track.state == 'TRACKING' else track.state,
+        'attendanceStatus': 'NOT_RECORDED',
+        'errorCode': 'IDENTITY_NOT_VERIFIED',
+        'message': 'Identitas masih diverifikasi.',
+      })
+      faces_payload.append(face_payload)
+      continue
+
+    live_state = track.liveness_state
+    if not settings.face_liveness_enabled or live_state != 'LIVE':
+      face_payload.update({
+        'status': live_state if settings.face_liveness_enabled else 'MANUAL_ONLY',
+        'livenessState': live_state,
+        'liveness': live_state,
+        'attendanceStatus': 'NOT_RECORDED',
+        'errorCode': 'LIVENESS_DISABLED' if not settings.face_liveness_enabled else live_state,
+        'message': 'Presensi otomatis nonaktif; minta petugas memverifikasi.' if not settings.face_liveness_enabled else 'Menunggu verifikasi liveness.',
+      })
       faces_payload.append(face_payload)
       continue
 
@@ -106,6 +224,7 @@ async def scan(session_id: int = Form(...), image: UploadFile = File(...), db: S
       face_payload.update({'status': 'STUDENT_INACTIVE', 'attendanceStatus': 'NOT_RECORDED'})
       faces_payload.append(face_payload)
       continue
+    face_payload['studentName'] = student.full_name
 
     key = (result.student_id, session.id, session.mode)
     with _scan_lock:
@@ -128,6 +247,15 @@ async def scan(session_id: int = Form(...), image: UploadFile = File(...), db: S
           db.rollback()
           if exc.status_code == 409:
             duplicate = True
+          elif exc.detail.get('code') == 'CHECK_OUT_TOO_EARLY':
+            face_payload.update({
+              'status': 'CHECK_OUT_TOO_EARLY',
+              'attendanceStatus': 'NOT_RECORDED',
+              'errorCode': 'CHECK_OUT_TOO_EARLY',
+              'message': exc.detail['message'],
+              'trackState': track.state,
+              'state': track.state,
+            })
           else:
             face_payload.update({'status': 'ATTENDANCE_ERROR', 'attendanceStatus': 'NOT_RECORDED'})
         except Exception:
@@ -136,6 +264,8 @@ async def scan(session_id: int = Form(...), image: UploadFile = File(...), db: S
           face_payload.update({'status': 'ATTENDANCE_ERROR', 'attendanceStatus': 'NOT_RECORDED'})
       if (duplicate or attendance_record is not None) and result.track_id is not None:
         face_recognition_service.mark_attendance_attempted(session.id, result.track_id)
+        if track and track.state == 'ATTENDED':
+          face_payload.update({'trackState': 'ATTENDED', 'state': 'ATTENDED'})
 
     if duplicate:
       face_payload.update({'status': 'DUPLICATE_SCAN', 'attendanceStatus': 'ALREADY_RECORDED'})
@@ -172,6 +302,10 @@ async def scan(session_id: int = Form(...), image: UploadFile = File(...), db: S
       'similarity': result.similarity,
       'method': 'FACE',
       'track_id': result.track_id,
+      'session_id': session.id,
+      'attendance_id': attendance_record.id,
+      'recorded_at': data['recordedAt'],
+      'status': attendance_record.status,
     }
     try:
       await broadcast('ATTENDANCE_SUCCESS', event)
@@ -183,6 +317,7 @@ async def scan(session_id: int = Form(...), image: UploadFile = File(...), db: S
     response_data = {**legacy_result, 'faces': faces_payload, 'attendances': attendance_records}
   else:
     response_data = {'faces': faces_payload, 'attendances': attendance_records}
+  response_data['livenessMode'] = 'PASSIVE' if settings.face_liveness_enabled else 'MANUAL_ONLY'
   return {'success': True, 'data': response_data}
 @router.get('/api/attendance')
 def attendance(today:bool=False,date_from:date|None=None,date_to:date|None=None,status:str|None=None,db:Session=Depends(get_db),u=Depends(user_dep)):

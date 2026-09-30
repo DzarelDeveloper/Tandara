@@ -109,12 +109,33 @@ def test_check_out_uses_existing_attendance_state(client, headers, student, monk
 	db.close()
 
 
+def test_same_registered_student_checks_in_then_checks_out(client, headers, student, monkeypatch, attendance_clock):
+	monkeypatch.setattr(attendance_router.face_recognition_service, 'recognize_image_many', lambda content, db, **kwargs: [recognized(student)])
+	attendance_clock('06:45:00')
+	check_in_session = open_session(client, headers['guru'], 'CHECK_IN')
+	check_in = submit_scan(client, headers['guru'], check_in_session).json()['data']['attendances'][0]
+	assert check_in['studentId'] == str(student)
+	assert client.post(f'/api/attendance-sessions/{check_in_session}/close', headers=headers['guru']).status_code == 200
+
+	attendance_clock('15:30:00')
+	check_out_session = open_session(client, headers['guru'], 'CHECK_OUT')
+	check_out = submit_scan(client, headers['guru'], check_out_session).json()['data']['attendances'][0]
+	assert check_out['studentId'] == str(student)
+	assert check_out['id'] == check_in['id']
+	assert check_out['checkOutTime'].endswith('15:30:00')
+	with SessionLocal() as db:
+		assert db.query(Attendance).filter_by(student_id=student).count() == 1
+
+
 def test_unknown_face_does_not_create_attendance(client, headers, student, monkeypatch):
 	session_id = open_session(client, headers['admin'])
 	monkeypatch.setattr(attendance_router.face_recognition_service, 'recognize_image_many', lambda content, db, **kwargs: [RecognitionResult('UNKNOWN_FACE', reason='BELOW_THRESHOLD')])
 	response = submit_scan(client, headers['admin'], session_id)
 	assert response.status_code == 422
 	assert response.json()['code'] == 'UNKNOWN_FACE'
+	assert response.json()['data']['attendances'] == []
+	assert response.json()['data']['faces'][0]['recognitionStatus'] == 'UNKNOWN_FACE'
+	assert response.json()['data']['faces'][0]['trackState'] == 'TRACKING'
 	assert 'student' not in str(response.json()).lower()
 	db = SessionLocal()
 	assert db.query(Attendance).count() == 0

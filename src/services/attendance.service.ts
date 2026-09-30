@@ -62,9 +62,12 @@ export interface FaceScanResult {
 
 export interface TrackedFace {
   liveness: 'LIVENESS_PENDING' | 'LIVE' | 'SPOOF_SUSPECTED';
+  livenessState: 'LIVENESS_PENDING' | 'LIVE' | 'SPOOF_SUSPECTED';
   message?: string;
   errorCode?: string;
   trackId: number | null;
+  recognitionStatus: string;
+  trackState: 'TRACKING' | 'VERIFYING' | 'VERIFIED' | 'ATTENDED' | 'UNKNOWN';
   state: 'TRACKING' | 'VERIFYING' | 'VERIFIED' | 'ATTENDED' | 'UNKNOWN';
   evidenceCount: number;
   status: string;

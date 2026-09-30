@@ -17,13 +17,15 @@ export class ApiError extends Error {
   code?: string;
   status: number;
   telemetry?: Record<string, unknown>;
+  data?: Record<string, unknown>;
 
-  constructor(message: string, status: number, code?: string, telemetry?: Record<string, unknown>) {
+  constructor(message: string, status: number, code?: string, telemetry?: Record<string, unknown>, data?: Record<string, unknown>) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.telemetry = telemetry;
+    this.data = data;
   }
 }
 
@@ -51,7 +53,8 @@ export async function apiRequest<T>(
       const detail = errorData?.detail;
       const message = errorData?.message || (typeof detail === 'object' ? detail.message : detail) || (response.status === 401 ? 'Sesi login tidak valid atau telah berakhir.' : response.status === 403 ? 'Anda tidak memiliki izin untuk aksi ini.' : `HTTP Error ${response.status}`);
       const telemetry = errorData?.telemetry || (typeof detail === 'object' ? detail?.telemetry : undefined);
-      throw new ApiError(message, response.status, errorData?.code || detail?.code, telemetry);
+      const data = errorData?.data || (typeof detail === 'object' ? detail?.data : undefined);
+      throw new ApiError(message, response.status, errorData?.code || detail?.code, telemetry, data);
     }
 
     const payload = await response.json();
@@ -75,7 +78,8 @@ export async function apiRequestBlob(endpoint: string, options: RequestInit = {}
       const detail = errorData?.detail;
       const message = errorData?.message || (typeof detail === 'object' ? detail.message : detail) || (response.status === 401 ? 'Sesi login tidak valid atau telah berakhir.' : response.status === 403 ? 'Anda tidak memiliki izin untuk aksi ini.' : `HTTP Error ${response.status}`);
       const telemetry = errorData?.telemetry || (typeof detail === 'object' ? detail?.telemetry : undefined);
-      throw new ApiError(message, response.status, errorData?.code || detail?.code, telemetry);
+      const data = errorData?.data || (typeof detail === 'object' ? detail?.data : undefined);
+      throw new ApiError(message, response.status, errorData?.code || detail?.code, telemetry, data);
     }
     return response;
   } catch (err: unknown) {
