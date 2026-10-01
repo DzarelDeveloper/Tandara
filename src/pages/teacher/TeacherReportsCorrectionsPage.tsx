@@ -3,7 +3,7 @@
  * Route: /teacher/reports-corrections
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   BarChart3,
   FileCheck2,
@@ -21,8 +21,15 @@ import { DataTable, Column } from '../../components/ui/DataTable';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { CorrectionFormModal } from '../../components/teacher/CorrectionFormModal';
 import { useToast } from '../../context/ToastContext';
-import { AttendanceCorrection } from '../../types';
+import { AttendanceCorrection, Class } from '../../types';
 import { reportsService } from '../../services/reports.service';
+import { classesService } from '../../services/classes.service';
+
+const mapReportsStatusForBackend = (status: string): string | null => {
+  if (!status) return null;
+  if (status === 'PERMISSION') return 'EXCUSED';
+  return status;
+};
 
 export const TeacherReportsCorrectionsPage: React.FC = () => {
   const { showToast } = useToast();
@@ -32,9 +39,14 @@ export const TeacherReportsCorrectionsPage: React.FC = () => {
   const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly'>('monthly');
   const [selectedClass, setSelectedClass] = useState('');
   const [selectedStatus, setSelectedStatus] = useState('');
+  const [classes, setClasses] = useState<Class[]>([]);
 
   const [showCorrectionModal, setShowCorrectionModal] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+
+  useEffect(() => {
+    classesService.getClasses().then(setClasses).catch(() => setClasses([]));
+  }, []);
 
   const kpis = [
     { label: 'Rata-rata Kehadiran', value: '—', icon: BarChart3, color: 'text-emerald-600' },
@@ -46,7 +58,11 @@ export const TeacherReportsCorrectionsPage: React.FC = () => {
   const handleExportCsv = async () => {
     setIsDownloading(true);
     try {
-      const response = await reportsService.downloadAttendanceCsv({ classId: selectedClass, status: selectedStatus });
+      const backendStatus = mapReportsStatusForBackend(selectedStatus);
+      const response = await reportsService.downloadAttendanceCsv({
+        classId: selectedClass || undefined,
+        status: backendStatus || undefined,
+      });
       const blob = await response.blob();
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
@@ -199,9 +215,7 @@ export const TeacherReportsCorrectionsPage: React.FC = () => {
                 className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
               >
                 <option value="">Semua Kelas</option>
-                <option value="X-A">X-A</option>
-                <option value="XI-IPA-1">XI-IPA-1</option>
-                <option value="XII-IPA-1">XII-IPA-1</option>
+                {classes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
 
               <select
@@ -253,7 +267,7 @@ export const TeacherReportsCorrectionsPage: React.FC = () => {
                       {kpi.label}
                     </p>
                     <p className="text-2xl font-semibold font-mono tabular-nums text-slate-900 mt-1">{kpi.value}</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">Belum ada data untuk dihitung</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Data backend belum tersedia</p>
                   </div>
                   <div className="w-10 h-10 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center shrink-0">
                     <Icon className={`w-5 h-5 ${kpi.color}`} />

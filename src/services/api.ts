@@ -16,13 +16,25 @@ export class BackendDisconnectedError extends Error {
 export class ApiError extends Error {
   code?: string;
   status: number;
+  telemetry?: Record<string, unknown>;
+  data?: Record<string, unknown>;
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(message: string, status: number, code?: string, telemetry?: Record<string, unknown>, data?: Record<string, unknown>) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.telemetry = telemetry;
+    this.data = data;
   }
+}
+
+function responseErrorMessage(errorData: any, status: number): string {
+  if (status >= 500) return 'Layanan backend mengalami gangguan. Silakan coba lagi.';
+  const detail = errorData?.detail;
+  if (Array.isArray(detail)) return detail.map((item) => `${item.loc?.slice(1).join('.') || 'Data'}: ${item.msg || 'Tidak valid'}`).join('; ');
+  return errorData?.message || (typeof detail === 'string' ? detail : detail?.message)
+    || (status === 401 ? 'Sesi login tidak valid atau telah berakhir.' : status === 403 ? 'Anda tidak memiliki izin untuk aksi ini.' : `Permintaan gagal (HTTP ${status}).`);
 }
 
 /**
@@ -37,6 +49,7 @@ export async function apiRequest<T>(
     const token = localStorage.getItem(ACCESS_TOKEN_KEY);
     const response = await fetch(url, {
       ...options,
+      signal: options.signal ?? AbortSignal.timeout(30_000),
       headers: {
         ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -47,17 +60,20 @@ export async function apiRequest<T>(
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const detail = errorData?.detail;
-      const message = errorData?.message || (typeof detail === 'object' ? detail.message : detail) || (response.status === 401 ? 'Sesi login tidak valid atau telah berakhir.' : response.status === 403 ? 'Anda tidak memiliki izin untuk aksi ini.' : `HTTP Error ${response.status}`);
-      throw new ApiError(message, response.status, errorData?.code || detail?.code);
+      const message = responseErrorMessage(errorData, response.status);
+      const telemetry = errorData?.telemetry || (typeof detail === 'object' ? detail?.telemetry : undefined);
+      const data = errorData?.data || (typeof detail === 'object' ? detail?.data : undefined);
+      throw new ApiError(message, response.status, errorData?.code || detail?.code, telemetry, data);
     }
 
     const payload = await response.json();
-    return (payload?.data ?? payload) as T;
+    return (payload && Object.prototype.hasOwnProperty.call(payload, 'data') ? payload.data : payload) as T;
   } catch (err: unknown) {
     // If fetch failed completely (network failure / connection refused), indicate backend disconnected
     if (err instanceof TypeError && err.message.includes('fetch')) {
       throw new BackendDisconnectedError();
     }
+    if (err instanceof DOMException && err.name === 'TimeoutError') throw new Error('Permintaan melewati batas waktu. Silakan coba lagi.');
     throw err;
   }
 }
@@ -66,16 +82,19 @@ export async function apiRequestBlob(endpoint: string, options: RequestInit = {}
   const url = `${API_BASE_URL}${endpoint}`;
   try {
     const token = localStorage.getItem(ACCESS_TOKEN_KEY);
-    const response = await fetch(url, { ...options, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } });
+    const response = await fetch(url, { ...options, signal: options.signal ?? AbortSignal.timeout(30_000), headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } });
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const detail = errorData?.detail;
-      const message = errorData?.message || (typeof detail === 'object' ? detail.message : detail) || (response.status === 401 ? 'Sesi login tidak valid atau telah berakhir.' : response.status === 403 ? 'Anda tidak memiliki izin untuk aksi ini.' : `HTTP Error ${response.status}`);
-      throw new ApiError(message, response.status, errorData?.code || detail?.code);
+      const message = responseErrorMessage(errorData, response.status);
+      const telemetry = errorData?.telemetry || (typeof detail === 'object' ? detail?.telemetry : undefined);
+      const data = errorData?.data || (typeof detail === 'object' ? detail?.data : undefined);
+      throw new ApiError(message, response.status, errorData?.code || detail?.code, telemetry, data);
     }
     return response;
   } catch (err: unknown) {
     if (err instanceof TypeError && err.message.includes('fetch')) throw new BackendDisconnectedError();
+    if (err instanceof DOMException && err.name === 'TimeoutError') throw new Error('Permintaan melewati batas waktu. Silakan coba lagi.');
     throw err;
   }
 }

@@ -19,8 +19,13 @@ export const studentsService = {
   /**
    * Fetch the active student list from FastAPI.
    */
-  async getStudents(): Promise<Student[]> {
-    return apiRequest<Student[]>('/api/students');
+  async getStudents(isActive?: boolean): Promise<Student[]> {
+    const rows: Student[] = [];
+    for (let page = 1; ; page++) {
+      const batch = await apiRequest<Student[]>(`/api/students?page=${page}&page_size=500${isActive === undefined ? '' : `&is_active=${isActive}`}`);
+      rows.push(...batch);
+      if (batch.length < 500) return rows;
+    }
   },
 
   async getStudentById(id: string): Promise<Student | null> {
@@ -35,6 +40,24 @@ export const studentsService = {
     return apiRequest<Student>('/api/students', { method: 'POST', body: JSON.stringify({
       nis: payload.nis, full_name: payload.fullName, class_id: Number(payload.classId), guardian_id: payload.guardianId ? Number(payload.guardianId) : null, gender: payload.gender,
     }) });
+  },
+
+  async updateStudent(id: string, payload: CreateStudentPayload): Promise<Student> {
+    return apiRequest<Student>(`/api/students/${id}`, { method: 'PATCH', body: JSON.stringify({
+      nis: payload.nis, full_name: payload.fullName, class_id: Number(payload.classId), gender: payload.gender,
+    }) });
+  },
+
+  async deactivateStudent(id: string): Promise<void> {
+    await apiRequest(`/api/students/${id}`, { method: 'DELETE' });
+  },
+
+  async reactivateStudent(id: string): Promise<Student> {
+    return apiRequest(`/api/students/${id}/status`, { method: 'PATCH', body: JSON.stringify({ is_active: true }) });
+  },
+
+  async permanentlyDeleteStudent(id: string): Promise<{ id: string; cleanupPending: boolean }> {
+    return apiRequest(`/api/students/${id}/permanent`, { method: 'DELETE' });
   },
 
   async enrollFace(studentId: string, faceEmbeddings: number[][]): Promise<{ success: boolean }> {

@@ -3,7 +3,7 @@
  * Route: /teacher/attendance
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   CheckCircle2,
   Clock,
@@ -20,16 +20,23 @@ import { StatusBadge } from '../../components/ui/StatusBadge';
 import { useToast } from '../../context/ToastContext';
 import { AttendanceRecord } from '../../types';
 import { attendanceService } from '../../services/attendance.service';
+import { AttendanceSchedulePanel } from '../../components/teacher/AttendanceSchedulePanel';
 import { CorrectionFormModal } from '../../components/teacher/CorrectionFormModal';
 import { reportsService } from '../../services/reports.service';
 import { classesService } from '../../services/classes.service';
 import { Class } from '../../types';
 
+const mapAttendanceStatusForBackend = (status: string): string | null => {
+  if (!status) return null;
+  if (status === 'PERMISSION') return 'EXCUSED';
+  return status;
+};
+
 export const TeacherAttendancePage: React.FC = () => {
   const { showToast } = useToast();
 
   const [search, setSearch] = useState('');
-  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [selectedDate, setSelectedDate] = useState(() => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date()));
   const [selectedGrade, setSelectedGrade] = useState('');
   const [selectedClass, setSelectedClass] = useState('');
   const [selectedStatus, setSelectedStatus] = useState('');
@@ -37,16 +44,40 @@ export const TeacherAttendancePage: React.FC = () => {
   const [summary, setSummary] = useState({ today: 0, students: 0 });
   const [selectedRecord, setSelectedRecord] = useState<AttendanceRecord | null>(null);
   const [classes, setClasses] = useState<Class[]>([]);
-  const load = () => Promise.all([attendanceService.getAttendanceRecords({ date_from: selectedDate, date_to: selectedDate, ...(selectedStatus ? { status: selectedStatus } : {}) }), attendanceService.getSummary()]).then(([rows, stats]) => { setAttendanceRecords(rows); setSummary(stats); });
-  useEffect(() => { load().catch(() => undefined); }, [selectedDate, selectedStatus]);
+  const [isLoading, setIsLoading] = useState(false);
+  const load = useCallback(() => {
+    setIsLoading(true);
+    const backendStatus = mapAttendanceStatusForBackend(selectedStatus);
+    return Promise.all([
+      attendanceService.getAttendanceRecords({
+        date_from: selectedDate,
+        date_to: selectedDate,
+        ...(backendStatus ? { status: backendStatus } : {}),
+        ...(selectedClass ? { class_id: selectedClass } : {}),
+      }),
+      attendanceService.getSummary(),
+    ]).then(([rows, stats]) => { setAttendanceRecords(rows); setSummary(stats); setIsLoading(false); })
+      .catch(() => { setIsLoading(false); });
+  }, [selectedDate, selectedStatus, selectedClass]);
+  useEffect(() => { void load(); }, [load]);
+  useEffect(() => attendanceService.subscribe((message) => {
+    if (['ATTENDANCE_SUCCESS', 'ATTENDANCE_CORRECTED', 'ATTENDANCE_SCHEDULE_UPDATED'].includes(message.event)) void load().catch(() => undefined);
+  }), [load]);
   useEffect(() => { classesService.getClasses().then(setClasses).catch(() => setClasses([])); }, []);
 
-  const kpis = [
-    { label: 'Presensi Hari Ini', value: String(summary.today), icon: CheckCircle2, color: 'text-emerald-600' },
-    { label: 'Total Siswa', value: String(summary.students), icon: Clock, color: 'text-amber-600' },
-    { label: 'Izin / Sakit', value: String(attendanceRecords.filter((item) => ['SICK', 'PERMISSION'].includes(item.status)).length), icon: AlertCircle, color: 'text-blue-600' },
-    { label: 'Belum Hadir', value: String(Math.max(0, summary.students - attendanceRecords.length)), icon: XCircle, color: 'text-red-600' },
-  ];
+  const kpis = isLoading
+    ? [
+        { label: 'Presensi Hari Ini', value: 'Memuat…', icon: CheckCircle2, color: 'text-emerald-600' },
+        { label: 'Total Siswa', value: 'Memuat…', icon: Clock, color: 'text-amber-600' },
+        { label: 'Izin / Sakit', value: 'Memuat…', icon: AlertCircle, color: 'text-blue-600' },
+        { label: 'Belum Hadir', value: 'Memuat…', icon: XCircle, color: 'text-red-600' },
+      ]
+    : [
+        { label: 'Presensi Hari Ini', value: String(summary.today), icon: CheckCircle2, color: 'text-emerald-600' },
+        { label: 'Total Siswa', value: String(summary.students), icon: Clock, color: 'text-amber-600' },
+        { label: 'Izin / Sakit', value: String(attendanceRecords.filter((item) => ['SICK', 'EXCUSED'].includes(item.status)).length), icon: AlertCircle, color: 'text-blue-600' },
+        { label: 'Belum Hadir', value: String(Math.max(0, summary.students - attendanceRecords.length)), icon: XCircle, color: 'text-red-600' },
+      ];
 
   const columns: Column<AttendanceRecord>[] = [
     {
@@ -100,14 +131,20 @@ export const TeacherAttendancePage: React.FC = () => {
 
   const handleExportToday = async () => {
     try {
-      const response = await reportsService.downloadAttendanceCsv({ startDate: selectedDate, endDate: selectedDate, classId: selectedClass, status: selectedStatus });
+      const backendStatus = mapAttendanceStatusForBackend(selectedStatus);
+      const response = await reportsService.downloadAttendanceCsv({
+        startDate: selectedDate,
+        endDate: selectedDate,
+        classId: selectedClass || undefined,
+        status: backendStatus || undefined,
+      });
       const blob = await response.blob(); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'tandara-attendance.csv'; link.click(); URL.revokeObjectURL(link.href);
     } catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal mengunduh laporan.' }); }
   };
 
   const handleResetFilters = () => {
     setSearch('');
-    setSelectedDate(new Date().toISOString().split('T')[0]);
+    setSelectedDate(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date()));
     setSelectedGrade('');
     setSelectedClass('');
     setSelectedStatus('');
@@ -139,6 +176,8 @@ export const TeacherAttendancePage: React.FC = () => {
         }
       />
 
+
+      <AttendanceSchedulePanel onSaved={() => { void load().catch(() => undefined); }} />
 
       {/* KPI Cards (All values '—') */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -221,7 +260,7 @@ export const TeacherAttendancePage: React.FC = () => {
         <div className="lg:col-span-3">
           <DataTable
             columns={columns}
-            data={attendanceRecords.filter((item) => (!search || `${item.studentName} ${item.nis}`.toLowerCase().includes(search.toLowerCase())) && (!selectedClass || classes.find((entry) => entry.id === selectedClass)?.name === item.className))}
+            data={attendanceRecords.filter((item) => (!search || `${item.studentName} ${item.nis}`.toLowerCase().includes(search.toLowerCase())))}
             emptyTitle="Belum ada data presensi untuk filter ini."
             emptyDescription="Data absensi wajah harian akan tersinkronisasi saat sesi absensi dijalankan di gerbang sekolah."
           />
@@ -247,7 +286,7 @@ export const TeacherAttendancePage: React.FC = () => {
           </div>
         </div>
       </div>
-      <CorrectionFormModal isOpen={!!selectedRecord} attendanceId={selectedRecord?.id} onClose={() => setSelectedRecord(null)} onSuccess={() => load()} />
+      <CorrectionFormModal isOpen={!!selectedRecord} attendanceId={selectedRecord?.id} attendanceRecord={selectedRecord} onClose={() => setSelectedRecord(null)} onSuccess={() => load()} />
     </div>
   );
 };

@@ -8,13 +8,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..main import Attendance, Student, localnow, user_dep
+from ..main import Attendance, Student, localnow, require
 
 router = APIRouter(tags=['Reports'])
 
 
 @router.get('/api/reports/attendance.csv')
-def attendance_csv(date_from: date | None = None, date_to: date | None = None, class_id: int | None = None, student_id: int | None = None, status: str | None = None, db: Session = Depends(get_db), u=Depends(user_dep)):
+def attendance_csv(date_from: date | None = None, date_to: date | None = None, class_id: int | None = None, student_id: int | None = None, status: str | None = None, db: Session = Depends(get_db), u=Depends(require('ADMIN_IT', 'GURU_PIKET'))):
     q = select(Attendance).join(Student).order_by(Attendance.attendance_date.desc())
     if date_from: q = q.where(Attendance.attendance_date >= date_from)
     if date_to: q = q.where(Attendance.attendance_date <= date_to)

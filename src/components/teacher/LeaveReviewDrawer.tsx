@@ -3,7 +3,7 @@
  * Drawer for inspecting parent leave requests (sakit/izin) and approving/rejecting.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Drawer } from '../ui/Drawer';
 import { useToast } from '../../context/ToastContext';
 import { LeaveRequest } from '../../types';
@@ -29,6 +29,18 @@ export const LeaveReviewDrawer: React.FC<LeaveReviewDrawerProps> = ({
   const [rejectReason, setRejectReason] = useState('');
   const [rejectError, setRejectError] = useState('');
 
+  useEffect(() => {
+    if (!isOpen) {
+      setReviewNote('');
+      setRejectMode(false);
+      setRejectReason('');
+      setRejectError('');
+    } else if (leaveRequest) {
+      const savedNote = (leaveRequest as unknown as { reviewerNote?: string }).reviewerNote ?? leaveRequest.teacherNotes;
+      if (savedNote) setReviewNote(savedNote);
+    }
+  }, [isOpen, leaveRequest]);
+
   const handleApprove = async () => {
     try { await leaveService.approveRequest(leaveRequest?.id || '', reviewNote); await onReviewed(); showToast({ type: 'success', message: 'Pengajuan izin disetujui.' }); }
     catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal menyetujui pengajuan.' }); }
@@ -51,6 +63,15 @@ export const LeaveReviewDrawer: React.FC<LeaveReviewDrawerProps> = ({
 
   if (!leaveRequest) return null;
 
+  const hasNis = Boolean(leaveRequest.nis);
+  const hasClass = Boolean(leaveRequest.className);
+  const hasParent = Boolean(leaveRequest.parentName);
+  const hasReviewedBy = Boolean(leaveRequest.reviewedBy);
+  const hasReviewedAt = Boolean(leaveRequest.reviewedAt);
+  // Backend returns reviewerNote; legacy frontend may call it teacherNotes
+  const priorReviewNote = (leaveRequest as unknown as { reviewerNote?: string }).reviewerNote ?? leaveRequest.teacherNotes;
+  const hasPriorReviewNote = Boolean(priorReviewNote);
+
   return (
     <Drawer
       isOpen={isOpen}
@@ -68,16 +89,29 @@ export const LeaveReviewDrawer: React.FC<LeaveReviewDrawerProps> = ({
             </div>
             <div>
               <h4 className="text-sm font-semibold text-slate-900">{leaveRequest.studentName}</h4>
-              <p className="text-xs text-slate-500">
-                NIS: {leaveRequest.nis} | Kelas: {leaveRequest.className}
-              </p>
+              {(hasNis || hasClass) && (
+                <p className="text-xs text-slate-500">
+                  {hasNis && <>NIS: {leaveRequest.nis}{hasClass ? ' | ' : ''}</>}
+                  {hasClass && <>Kelas: {leaveRequest.className}</>}
+                </p>
+              )}
+              {!hasNis && !hasClass && <p className="text-xs text-slate-400">Data NIS dan kelas tidak tersedia dari backend.</p>}
             </div>
           </div>
 
-          <div className="pt-2 border-t border-slate-200/80 text-xs text-slate-600">
-            <span className="text-slate-400 block text-[10px] uppercase font-semibold">Pengaju (Wali Murid)</span>
-            <span className="font-medium text-slate-800">{leaveRequest.parentName}</span>
-          </div>
+          {hasParent && (
+            <div className="pt-2 border-t border-slate-200/80 text-xs text-slate-600">
+              <span className="text-slate-400 block text-[10px] uppercase font-semibold">Pengaju (Wali Murid)</span>
+              <span className="font-medium text-slate-800">{leaveRequest.parentName}</span>
+              {leaveRequest.parentPhone && <span className="ml-2 font-mono text-slate-500">{leaveRequest.parentPhone}</span>}
+            </div>
+          )}
+          {!hasParent && (
+            <div className="pt-2 border-t border-slate-200/80 text-xs text-slate-400">
+              <span className="block text-[10px] uppercase font-semibold text-slate-400">Pengaju (Wali Murid)</span>
+              <span>Informasi pengaju tidak tersedia dari backend.</span>
+            </div>
+          )}
         </div>
 
         {/* Tipe & Periode Tanggal */}
@@ -118,16 +152,29 @@ export const LeaveReviewDrawer: React.FC<LeaveReviewDrawerProps> = ({
         {/* Catatan Reviewer */}
         <div>
           <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-            Catatan Petugas Piket (Opsional)
+            Catatan Petugas Piket {hasPriorReviewNote ? '(Tersimpan dari review sebelumnya)' : '(Opsional)'}
           </label>
           <textarea
             rows={2}
             value={reviewNote}
             onChange={(e) => setReviewNote(e.target.value)}
-            placeholder="Tambahkan catatan tindak lanjut..."
+            placeholder={hasPriorReviewNote ? 'Catatan review ini akan menimpa catatan lama saat disetujui/ditolak...' : 'Tambahkan catatan tindak lanjut...'}
             className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
           />
         </div>
+
+        {/* Riwayat Review (jika sudah direview) */}
+        {(hasPriorReviewNote || hasReviewedBy || hasReviewedAt) && (
+          <div className="p-3 rounded-lg border border-slate-200 bg-slate-50 text-xs space-y-1.5">
+            <p className="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">Riwayat Review Terakhir</p>
+            {hasReviewedBy && (
+              <p><span className="text-slate-500">Direview oleh:</span> <span className="font-medium text-slate-800">{leaveRequest.reviewedBy}</span></p>
+            )}
+            {hasReviewedAt && (
+              <p><span className="text-slate-500">Waktu review:</span> <span className="font-mono text-slate-800">{new Date(leaveRequest.reviewedAt as unknown as string).toLocaleString('id-ID')}</span></p>
+            )}
+          </div>
+        )}
 
         {/* Rejection input field if reject mode activated */}
         {rejectMode && (

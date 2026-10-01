@@ -34,6 +34,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   }, []);
 
   const currentDateString = new Intl.DateTimeFormat('id-ID', {
+    timeZone: 'Asia/Jakarta',
     weekday: 'long',
     day: 'numeric',
     month: 'long',

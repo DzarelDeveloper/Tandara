@@ -57,7 +57,7 @@ def test_recognizes_nearest_student_above_threshold(client, actors, classroom, m
 	assert result.student_id == first_id
 	assert result.similarity == pytest.approx(0.8)
 	assert result.face_box == {'x': 0.0, 'y': 0.0, 'width': 0.625, 'height': 0.625}
-	assert set(result.timings_ms) == {'index', 'detection', 'embedding', 'matching', 'total'}
+	assert set(result.timings_ms) == {'index', 'detection', 'quality', 'embedding', 'matching', 'tracking', 'total'}
 	db.close()
 
 

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity, Camera, CheckCircle2, Database, RefreshCw, Server, ShieldAlert, StopCircle, Video } from 'lucide-react';
+import { AttendanceSchedulePanel } from '../../components/teacher/AttendanceSchedulePanel';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { ApiError } from '../../services/api';
 import { ActiveSessionHealth, DetectionDiagnostic, FaceEngineHealth, HealthStatus, systemService } from '../../services/system.service';
@@ -33,6 +34,7 @@ export const AdminDevicesSystemPage: React.FC = () => {
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [face, setFace] = useState<FaceEngineHealth | null>(null);
   const [session, setSession] = useState<ActiveSessionHealth | null>(null);
+  const [sessionError, setSessionError] = useState('');
   const [latency, setLatency] = useState<number | null>(null);
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -107,6 +109,7 @@ export const AdminDevicesSystemPage: React.FC = () => {
       }
       setFace(faceResult.status === 'fulfilled' ? faceResult.value : null);
       setSession(sessionResult.status === 'fulfilled' ? sessionResult.value : null);
+      setSessionError(sessionResult.status === 'rejected' ? 'Status sesi tidak dapat dimuat.' : '');
       if (devicesResult.status === 'fulfilled') {
         const available = devicesResult.value;
         setDevices(available);
@@ -150,7 +153,7 @@ export const AdminDevicesSystemPage: React.FC = () => {
     finally { window.clearTimeout(timeout); if (detectAbortRef.current === controller) detectAbortRef.current = null; setDetecting(false); }
   };
 
-  const dbReady = health?.database.status === 'connected'; const faceReady = face?.status === 'READY' || health?.face_recognition === 'READY'; const cameraReady = Boolean(stream && trackDetails);
+  const dbReady = health?.database.status === 'connected'; const faceReady = (face?.status ?? health?.face_recognition) === 'READY'; const cameraReady = Boolean(stream && trackDetails);
   const systemReady = serviceState === 'ONLINE' && dbReady && faceReady && cameraReady;
   const detectionMessage = diagnostic ? diagnostic.faceCount === 0 ? 'Wajah tidak terdeteksi.' : diagnostic.faceCount === 1 ? (diagnostic.quality === 'OK' ? '1 wajah terdeteksi.' : `1 wajah terdeteksi — ${diagnostic.quality}.`) : 'Lebih dari satu wajah terdeteksi.' : '';
 
@@ -175,6 +178,7 @@ export const AdminDevicesSystemPage: React.FC = () => {
       {(detectionMessage || diagnosticError) && <p className={`mt-3 text-sm ${diagnosticError ? 'text-red-700' : ''}`}>{diagnosticError || detectionMessage}</p>}
       <div className="mt-5"><p className="text-xs font-semibold mb-2">CAMERA DEVICES</p>{devices.length ? <ul className="text-sm space-y-1">{devices.map((device, index) => <li key={device.deviceId}>• {device.label || `Camera ${index + 1}`}</li>)}</ul> : <p className="text-sm text-slate-500">Label perangkat tersedia setelah browser memberikan izin kamera.</p>}</div>
     </section>
-    <div className="grid md:grid-cols-2 gap-4"><section className="bg-white border rounded-xl p-5"><h3 className="font-semibold mb-3">Attendance Session</h3>{session ? <div><Badge ok text="ACTIVE" /><p className="text-sm mt-2">Mode: {session.mode}</p><p className="text-sm">Camera Source: {session.cameraSource}</p><p className="text-sm">Opened At: {new Date(session.openedAt).toLocaleString('id-ID')}</p></div> : <div><Badge ok={false} text="NO ACTIVE SESSION" /><p className="text-xs text-slate-500 mt-2">Sesi hanya dibuka dari alur attendance.</p></div>}</section><section className="bg-white border rounded-xl p-5"><div className="flex gap-2"><ShieldAlert className="w-5 h-5 text-amber-600" /><div><h3 className="font-semibold">Parent Notification</h3><p className="text-xs font-semibold text-amber-700 mt-2">IN DEVELOPMENT</p><p className="text-sm text-slate-600 mt-2">Pengiriman notifikasi presensi ke aplikasi orang tua sedang dalam tahap pengembangan.</p></div></div></section></div>
+    <div className="grid md:grid-cols-2 gap-4"><section className="bg-white border rounded-xl p-5"><h3 className="font-semibold mb-3">Attendance Session</h3>{session ? <div><Badge ok text="ACTIVE" /><p className="text-sm mt-2">Mode: {session.mode}</p><p className="text-sm">Camera Source: {session.cameraSource}</p><p className="text-sm">Opened At: {new Date(session.openedAt).toLocaleString('id-ID')}</p></div> : <div><Badge ok={false} text={refreshing ? "CHECKING" : sessionError || "NO ACTIVE SESSION"} /><p className="text-xs text-slate-500 mt-2">Sesi hanya dibuka dari alur attendance.</p></div>}</section><section className="bg-white border rounded-xl p-5"><div className="flex gap-2"><ShieldAlert className="w-5 h-5 text-amber-600" /><div><h3 className="font-semibold">Parent Notification</h3><p className="text-xs font-semibold text-amber-700 mt-2">IN DEVELOPMENT</p><p className="text-sm text-slate-600 mt-2">Pengiriman notifikasi presensi ke aplikasi orang tua sedang dalam tahap pengembangan.</p></div></div></section></div>
+    <AttendanceSchedulePanel />
   </div>;
 };

@@ -151,6 +151,7 @@ Tandara/
 │   ├── tests/
 │   └── requirements.txt
 ├── scripts/
+│   ├── tandara-dev.ps1      # Launcher/setup Windows lintas platform
 │   └── tandara-windows-common.ps1
 ├── src/
 │   ├── components/
@@ -162,13 +163,19 @@ Tandara/
 │   ├── types/
 │   └── utils/
 ├── prepare-demo-windows.ps1
+├── setup.bat
+├── setup.sh
+├── start.bat
+├── start.sh
+├── stop.sh
+├── stop.bat
 ├── setup-tandara-windows.ps1
 ├── start-tandara-windows.ps1
 ├── stop-tandara-windows.ps1
 └── start-tandara.sh
 ```
 
-## Quick Start
+## Menjalankan Tandara
 
 ### Prasyarat model
 
@@ -181,75 +188,30 @@ backend/ml_models/face_recognition_sface.onnx
 
 File ONNX dan data biometrik sengaja tidak disimpan di Git. Pastikan kedua model tersedia dari paket demo/proyek yang telah disiapkan sebelum menjalankan launcher.
 
-### Windows 10 / 11
+### Ubuntu
 
-Tandara berjalan secara native—**tanpa WSL dan tanpa Docker**. Setup memerlukan koneksi internet untuk instalasi dependency pada penggunaan pertama. Bila Python 3.12 atau Node.js belum tersedia, script dapat memasangnya melalui `winget`.
-
-Jalankan dari PowerShell pada root project:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\setup-tandara-windows.ps1
-```
-
-Setup akan membuat virtual environment, menginstal dependency, membuat `.env` dengan JWT secret acak bila belum ada, menginisialisasi data demo secara non-destruktif, lalu menjalankan aplikasi.
-
-Untuk penggunaan berikutnya:
-
-```powershell
-.\start-tandara-windows.ps1
-```
-
-Opsi dan penghentian service:
-
-```powershell
-.\start-tandara-windows.ps1 -NoBrowser
-.\stop-tandara-windows.ps1
-```
-
-Log tersedia di `.logs\backend.log` dan `.logs\frontend.log`.
-
-#### Membuat paket demo Windows
-
-Dari mesin development yang telah memiliki kedua model ONNX:
-
-```powershell
-.\prepare-demo-windows.ps1
-```
-
-Paket ZIP tidak menyertakan database, `.env`, log, dependency terinstal, atau embedding wajah lokal. Script setup pada komputer tujuan tetap membutuhkan internet untuk mengambil dependency.
-
-### Ubuntu (development)
-
-Prasyarat: Python 3.12+, Node.js/npm, `curl`, dan `util-linux`. Siapkan environment satu kali:
+Setup pertama kali:
 
 ```bash
-python3.12 -m venv .venv
-.venv/bin/pip install -r backend/requirements.txt
-npm ci
-cp .env.example .env
+./setup.sh
 ```
 
-Ganti `SECRET_KEY` pada `.env` dengan nilai acak yang kuat. Untuk data demo development yang idempotent:
+Mulai Tandara:
 
 ```bash
-APP_ENV=development PYTHONPATH=backend .venv/bin/python -m app.cli.init_demo
+./start.sh
 ```
 
-Kemudian jalankan seluruh stack:
+Tekan `Ctrl+C` untuk menghentikan hanya service yang dimulai oleh launcher. Service Tandara sehat yang sudah berjalan akan digunakan kembali.
 
-```bash
-chmod +x start-tandara.sh
-./start-tandara.sh
-```
+### Windows
 
-Perintah lain yang tersedia:
+Setup pertama kali: jalankan `setup.bat`.
 
-```bash
-./start-tandara.sh --no-browser
-./start-tandara.sh --status
-```
+Untuk penggunaan berikutnya: jalankan `start.bat`.
 
-Tekan `Ctrl+C` untuk menghentikan service yang dibuat launcher.
+Launcher Windows menggunakan PowerShell bawaan Windows untuk pemeriksaan health dan cleanup proses.
+Jika launcher ditutup paksa, `stop.bat` hanya menghentikan PID tercatat yang command line-nya masih cocok dengan project Tandara ini.
 
 ### URL lokal
 
@@ -259,6 +221,10 @@ Tekan `Ctrl+C` untuk menghentikan service yang dibuat launcher.
 | Backend API | <http://127.0.0.1:8000> |
 | API documentation | <http://127.0.0.1:8000/docs> |
 | Health diagnostics | <http://127.0.0.1:8000/api/health> |
+
+Database lokal yang ada dan file `.env` tidak di-reset atau ditimpa launcher/setup. Model ONNX harus tersedia pada lokasi yang dikonfigurasi; setup tidak mengunduh model.
+
+Untuk membuat paket demo Windows, gunakan `prepare-demo-windows.ps1` dari mesin yang sudah memiliki model. Paket tidak menyertakan database, `.env`, log, dependency terinstal, atau embedding wajah lokal.
 
 ### Akun demo development
 

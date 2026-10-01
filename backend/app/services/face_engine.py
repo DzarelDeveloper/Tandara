@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from ..config import settings
+from .face_quality import FaceQualityAssessment, quality_evaluator
 
 
 class FaceEngineStatus(str, Enum):
@@ -43,6 +44,7 @@ class FaceEngine:
             import cv2
 
             self._cv2 = cv2
+            quality_evaluator.set_cv2(cv2)
             self.detector = cv2.FaceDetectorYN.create(str(detector_path), '', (320, 320), settings.face_detector_score_threshold, settings.face_detector_nms_threshold, settings.face_detector_top_k)
             self.recognizer = cv2.FaceRecognizerSF.create(str(recognizer_path), '')
             self.status = FaceEngineStatus.READY
@@ -71,26 +73,40 @@ class FaceEngine:
         if self.initialize() != FaceEngineStatus.READY:
             raise RuntimeError('FACE_ENGINE_NOT_READY')
         height, width = frame.shape[:2]
-        self.detector.setInputSize((width, height))
-        _, faces = self.detector.detect(frame)
-        return [] if faces is None else [face for face in faces]
+        max_dim = max(height, width)
+        if max_dim > 1280 and self._cv2 is not None:
+            scale = 1280.0 / max_dim
+            det_w = int(round(width * scale))
+            det_h = int(round(height * scale))
+            det_frame = self._cv2.resize(frame, (det_w, det_h), interpolation=self._cv2.INTER_AREA)
+            self.detector.setInputSize((det_w, det_h))
+            _, raw_faces = self.detector.detect(det_frame)
+            if raw_faces is None:
+                return []
+            scale_x = width / det_w
+            scale_y = height / det_h
+            faces = []
+            for face in raw_faces:
+                scaled = face.copy().astype(np.float32)
+                scaled[0::2][:7] *= scale_x
+                scaled[1::2][:7] *= scale_y
+                faces.append(scaled)
+            return faces
+        else:
+            self.detector.setInputSize((width, height))
+            _, faces = self.detector.detect(frame)
+            return [] if faces is None else [face.astype(np.float32) for face in faces]
 
-    def validate_face_quality(self, frame: np.ndarray, face: np.ndarray) -> str | None:
-        x, y, width, height = [float(value) for value in face[:4]]
-        frame_height, frame_width = frame.shape[:2]
-        if min(width, height) < settings.face_min_size_px or width / frame_width < settings.face_min_area_ratio or height / frame_height < settings.face_min_area_ratio:
-            return 'FACE_TOO_SMALL'
-        if x < 0 or y < 0 or x + width > frame_width or y + height > frame_height:
-            return 'FACE_OUT_OF_FRAME'
-        gray = self._cv2.cvtColor(frame[int(y):int(y + height), int(x):int(x + width)], self._cv2.COLOR_BGR2GRAY)
-        if float(self._cv2.Laplacian(gray, self._cv2.CV_64F).var()) < settings.face_blur_threshold:
-            return 'FACE_TOO_BLURRY'
-        brightness = float(np.mean(gray))
-        if brightness < settings.face_min_brightness:
-            return 'FACE_TOO_DARK'
-        if brightness > settings.face_max_brightness:
-            return 'FACE_TOO_BRIGHT'
-        return None
+    def evaluate_quality(self, frame: np.ndarray, face: np.ndarray, for_enrollment: bool = False) -> FaceQualityAssessment:
+        if self._cv2 is not None:
+            quality_evaluator.set_cv2(self._cv2)
+        assessment = quality_evaluator.evaluate(frame, face, for_enrollment=for_enrollment)
+        self._last_quality_assessment = assessment
+        return assessment
+
+    def validate_face_quality(self, frame: np.ndarray, face: np.ndarray, for_enrollment: bool = False) -> str | None:
+        assessment = self.evaluate_quality(frame, face, for_enrollment=for_enrollment)
+        return assessment.error_code
 
     def extract_embedding(self, frame: np.ndarray, face: np.ndarray) -> np.ndarray:
         if self.initialize() != FaceEngineStatus.READY:
@@ -101,8 +117,10 @@ class FaceEngine:
     @staticmethod
     def normalize_embedding(embedding: np.ndarray) -> np.ndarray:
         vector = np.asarray(embedding, dtype=np.float32).reshape(-1)
+        if not np.isfinite(vector).all():
+            raise ValueError('NON_FINITE_EMBEDDING')
         norm = float(np.linalg.norm(vector))
-        if norm == 0:
+        if not np.isfinite(norm) or norm == 0:
             raise ValueError('EMPTY_EMBEDDING')
         return vector / norm
 

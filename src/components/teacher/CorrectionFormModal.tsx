@@ -3,13 +3,13 @@
  * Modal for submitting an auditable attendance status correction.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Modal } from '../ui/Modal';
 import { useToast } from '../../context/ToastContext';
-import { AttendanceStatus } from '../../types';
+import { AttendanceRecord } from '../../types';
 import { attendanceService } from '../../services/attendance.service';
 
 const correctionSchema = z.object({
@@ -26,15 +26,16 @@ interface CorrectionFormModalProps {
   isOpen: boolean;
   onClose: () => void;
   attendanceId?: string;
+  attendanceRecord?: AttendanceRecord | null;
   onSuccess?: () => void;
 }
 
 export const CorrectionFormModal: React.FC<CorrectionFormModalProps> = ({
   isOpen,
-  onClose, attendanceId, onSuccess,
+  onClose, attendanceId, attendanceRecord, onSuccess,
 }) => {
   const { showToast } = useToast();
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
 
   const {
     register,
@@ -52,12 +53,49 @@ export const CorrectionFormModal: React.FC<CorrectionFormModalProps> = ({
     },
   });
 
+  useEffect(() => {
+    if (!isOpen) return;
+    if (attendanceRecord) {
+      reset({
+        studentId: attendanceRecord.studentId,
+        attendanceDate: attendanceRecord.date,
+        previousStatus: attendanceRecord.status === 'PERMISSION' ? 'EXCUSED' : attendanceRecord.status,
+        newStatus: 'PRESENT',
+        reason: '',
+      });
+    } else {
+      reset({
+        studentId: '',
+        attendanceDate: new Date().toISOString().split('T')[0],
+        previousStatus: 'UNEXCUSED',
+        newStatus: 'PRESENT',
+        reason: '',
+      });
+    }
+  }, [isOpen, attendanceRecord, reset]);
+
   const onSubmit = async (data: CorrectionFormValues) => {
-    if (!attendanceId) return;
+    const effectiveRecordId = attendanceId || attendanceRecord?.id;
+    if (!effectiveRecordId) {
+      showToast({ type: 'error', message: 'ID absensi tidak tersedia untuk koreksi.' });
+      return;
+    }
     setIsSubmitting(true);
-    try { await attendanceService.submitCorrection({ recordId: attendanceId, newStatus: data.newStatus, reason: data.reason }); showToast({ type: 'success', message: 'Koreksi presensi disimpan.' }); reset(); onClose(); onSuccess?.(); }
-    catch (e) { showToast({ type: 'error', message: e instanceof Error ? e.message : 'Koreksi gagal.' }); }
-    finally { setIsSubmitting(false); }
+    try {
+      await attendanceService.submitCorrection({
+        recordId: effectiveRecordId,
+        newStatus: data.newStatus,
+        reason: data.reason,
+      });
+      showToast({ type: 'success', message: 'Koreksi presensi disimpan.' });
+      reset();
+      onClose();
+      onSuccess?.();
+    } catch (e) {
+      showToast({ type: 'error', message: e instanceof Error ? e.message : 'Koreksi gagal.' });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -69,17 +107,26 @@ export const CorrectionFormModal: React.FC<CorrectionFormModalProps> = ({
       maxWidth="md"
     >
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-        {/* Siswa Selector (Empty state) */}
+        {/* Siswa Selector */}
         <div>
           <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
             Pilih Siswa <span className="text-red-500">*</span>
           </label>
-          <select
-            {...register('studentId')}
-            className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-          >
-            <option value="">-- Pilih Siswa (Daftar Kosong) --</option>
-          </select>
+          {attendanceRecord ? (
+            <div className="px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800">
+              <span className="font-semibold">{attendanceRecord.studentName}</span>
+              <span className="text-slate-500 ml-2 font-mono">{attendanceRecord.nis}</span>
+              <span className="text-slate-500 ml-2">{attendanceRecord.className}</span>
+            </div>
+          ) : (
+            <select
+              {...register('studentId')}
+              disabled
+              className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+            >
+              <option value="">-- Pilih Siswa dari Riwayat Absensi --</option>
+            </select>
+          )}
           {errors.studentId && (
             <p className="text-xs text-red-600 mt-1 font-medium">{errors.studentId.message}</p>
           )}
@@ -93,7 +140,8 @@ export const CorrectionFormModal: React.FC<CorrectionFormModalProps> = ({
           <input
             type="date"
             {...register('attendanceDate')}
-            className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+            disabled={!!attendanceRecord}
+            className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:text-slate-500"
           />
           {errors.attendanceDate && (
             <p className="text-xs text-red-600 mt-1 font-medium">{errors.attendanceDate.message}</p>
@@ -108,12 +156,14 @@ export const CorrectionFormModal: React.FC<CorrectionFormModalProps> = ({
             </label>
             <select
               {...register('previousStatus')}
-              className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              disabled={!!attendanceRecord}
+              className="w-full px-3 py-2 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-lg text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:text-slate-500"
             >
-              <option value="UNEXCUSED">Alpa / Belum Hadir</option>
+              <option value="PRESENT">Hadir</option>
               <option value="LATE">Terlambat</option>
               <option value="SICK">Sakit</option>
-              <option value="PERMISSION">Izin</option>
+              <option value="EXCUSED">Izin / Dispensasi</option>
+              <option value="UNEXCUSED">Alpa / Belum Hadir</option>
             </select>
           </div>
 
@@ -128,7 +178,8 @@ export const CorrectionFormModal: React.FC<CorrectionFormModalProps> = ({
               <option value="PRESENT">Hadir Tepat Waktu</option>
               <option value="LATE">Hadir Terlambat</option>
               <option value="SICK">Sakit Disetujui</option>
-              <option value="PERMISSION">Izin Disetujui</option>
+              <option value="EXCUSED">Izin / Dispensasi</option>
+              <option value="UNEXCUSED">Alpa / Tanpa Keterangan</option>
             </select>
           </div>
         </div>

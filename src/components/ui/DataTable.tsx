@@ -3,7 +3,7 @@
  * Accessible semantic table with pagination controls, responsive wrapper, and empty state.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { EmptyState } from './EmptyState';
 
@@ -37,7 +37,10 @@ export function DataTable<T>({
   const [currentPage, setCurrentPage] = useState(1);
   const totalPages = Math.max(1, Math.ceil(data.length / itemsPerPage));
 
-  const startIndex = (currentPage - 1) * itemsPerPage;
+  const page = Math.min(currentPage, totalPages);
+  useEffect(() => { setCurrentPage((value) => Math.min(value, totalPages)); }, [totalPages]);
+
+  const startIndex = (page - 1) * itemsPerPage;
   const currentData = data.slice(startIndex, startIndex + itemsPerPage);
 
   if (data.length === 0) {
@@ -92,7 +95,7 @@ export function DataTable<T>({
         <div className="flex items-center gap-1.5">
           <button
             type="button"
-            disabled={currentPage <= 1}
+            disabled={page <= 1}
             onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
             className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none transition-colors"
             aria-label="Halaman sebelumnya"
@@ -100,11 +103,11 @@ export function DataTable<T>({
             <ChevronLeft className="w-4 h-4" />
           </button>
           <span className="px-2 font-medium text-slate-600">
-            {currentPage} / {totalPages}
+            {page} / {totalPages}
           </span>
           <button
             type="button"
-            disabled={currentPage >= totalPages}
+            disabled={page >= totalPages}
             onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
             className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none transition-colors"
             aria-label="Halaman berikutnya"

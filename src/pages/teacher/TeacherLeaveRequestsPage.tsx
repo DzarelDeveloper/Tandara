@@ -8,8 +8,9 @@ import { PageHeader } from '../../components/ui/PageHeader';
 import { FilterBar } from '../../components/ui/FilterBar';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { LeaveReviewDrawer } from '../../components/teacher/LeaveReviewDrawer';
-import { LeaveRequest } from '../../types';
+import { Class, LeaveRequest } from '../../types';
 import { leaveService } from '../../services/leave.service';
+import { classesService } from '../../services/classes.service';
 import { useToast } from '../../context/ToastContext';
 
 export const TeacherLeaveRequestsPage: React.FC = () => {
@@ -21,12 +22,14 @@ export const TeacherLeaveRequestsPage: React.FC = () => {
 
   const [selectedRequest, setSelectedRequest] = useState<LeaveRequest | null>(null);
   const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
+  const [classes, setClasses] = useState<Class[]>([]);
   const { showToast } = useToast();
   const loadRequests = async () => {
     try { setLeaveRequests(await leaveService.getLeaveRequests()); }
     catch (error) { showToast({ type: 'error', message: error instanceof Error ? error.message : 'Gagal memuat pengajuan izin.' }); }
   };
   useEffect(() => { void loadRequests(); }, []);
+  useEffect(() => { classesService.getClasses().then(setClasses).catch(() => setClasses([])); }, []);
 
   const tabs = [
     { id: 'PENDING', label: 'Menunggu Review' },
@@ -129,10 +132,11 @@ export const TeacherLeaveRequestsPage: React.FC = () => {
     const matchesTab = activeTab === 'ALL' || request.status === activeTab;
     const query = search.toLowerCase();
     const matchesSearch = !query || `${request.studentName} ${request.parentName}`.toLowerCase().includes(query);
-    const matchesType = !selectedType || request.leaveType === ({ Sakit: 'SICK', Izin: 'PERMISSION', Dispensasi: 'DISPENSATION' } as Record<string, string>)[selectedType];
+    const matchesType = !selectedType || request.leaveType === selectedType;
+    const matchesClass = !selectedClass || request.className === (classes.find((entry) => entry.id === selectedClass)?.name ?? '');
     const matchesDate = !selectedDate || request.startDate === selectedDate;
-    return matchesTab && matchesSearch && matchesType && matchesDate;
-  }), [activeTab, leaveRequests, search, selectedDate, selectedType]);
+    return matchesTab && matchesSearch && matchesType && matchesClass && matchesDate;
+  }), [activeTab, leaveRequests, search, selectedDate, selectedType, selectedClass, classes]);
 
   const handleResetFilters = () => {
     setSearch('');
@@ -206,7 +210,7 @@ export const TeacherLeaveRequestsPage: React.FC = () => {
           className="px-3 py-2 text-xs sm:text-sm bg-slate-50 hover:bg-slate-100/70 border border-slate-200 rounded-lg text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
         >
           <option value="">Semua Kelas</option>
-          <option value="">Filter kelas tersedia berdasarkan data backend</option>
+          {classes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select>
 
         <input

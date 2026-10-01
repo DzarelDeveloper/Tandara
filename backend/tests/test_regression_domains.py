@@ -7,7 +7,7 @@ from starlette.websockets import WebSocketDisconnect
 from app.config import settings
 from app.database import SessionLocal
 from app.main import app, clients
-from app.models import Attendance, AuditLog, Student, User
+from app.models import Attendance, AttendanceSession, AuditLog, Student, User
 
 
 @pytest.mark.parametrize('method,path', [
@@ -117,10 +117,46 @@ def test_attendance_sessions_and_audits(client, actors, headers):
     assert client.post(f'/api/attendance-sessions/{sid}/close', headers=headers['guru']).status_code == 404
 
 
-def test_attendance_state_machine_list_summary_correction(client, actors, headers, student):
+def test_yesterdays_active_session_does_not_block_or_replace_today(client, actors, headers, monkeypatch):
+    import app.routers.attendance_sessions as sessions_router
+    import app.routers.dashboards as dashboards_router
+
+    now = datetime(2026, 9, 30, 8, 0)
+    monkeypatch.setattr(sessions_router, 'localnow', lambda: now)
+    monkeypatch.setattr(dashboards_router, 'localnow', lambda: now)
+    db = SessionLocal()
+    historical = AttendanceSession(
+        session_date=now - timedelta(days=1),
+        mode='CHECK_IN',
+        camera_source='BROWSER_CAMERA',
+        opened_by=actors['guru_id'],
+        status='ACTIVE',
+    )
+    db.add(historical)
+    db.commit()
+    historical_id = historical.id
+    db.close()
+
+    assert client.get('/api/attendance-sessions/active', headers=headers['guru']).json()['data'] is None
+    assert client.get('/api/dashboard/teacher', headers=headers['guru']).json()['data']['session'] is None
+    opened = client.post(
+        '/api/attendance-sessions/open',
+        headers=headers['guru'],
+        json={'mode': 'CHECK_IN', 'camera_source': 'BROWSER_CAMERA'},
+    )
+    assert opened.status_code == 200
+
+    db = SessionLocal()
+    assert db.get(AttendanceSession, historical_id).status == 'ACTIVE'
+    assert db.get(AttendanceSession, int(opened.json()['data']['id'])).session_date.date() == now.date()
+    db.close()
+
+
+def test_attendance_state_machine_list_summary_correction(client, actors, headers, student, attendance_clock):
     out = client.post('/api/attendance/manual', headers=headers['guru'], json={'student_id': student, 'mode': 'CHECK_OUT', 'reason': 'test reason'}); assert out.status_code == 422
     checkin = client.post('/api/attendance/manual', headers=headers['guru'], json={'student_id': student, 'mode': 'CHECK_IN', 'reason': 'test reason'}); assert checkin.status_code == 200; aid = checkin.json()['data']['id']
     assert client.post('/api/attendance/manual', headers=headers['guru'], json={'student_id': student, 'mode': 'CHECK_IN', 'reason': 'again'}).status_code == 409
+    attendance_clock('15:30:00')
     assert client.post('/api/attendance/manual', headers=headers['guru'], json={'student_id': student, 'mode': 'CHECK_OUT', 'reason': 'checkout'}).status_code == 200
     assert client.get('/api/attendance', headers=headers['guru'], params={'date_from': date.today().isoformat(), 'date_to': date.today().isoformat()}).status_code == 200
     assert client.get('/api/attendance', headers=headers['guru'], params={'date_from': 'bad'}).status_code == 422
@@ -175,3 +211,29 @@ def test_websocket_auth_events_and_disconnect(client, actors, headers, student):
         assert client.post(f"/api/attendance-sessions/{opened.json()['data']['id']}/close", headers=headers['admin']).status_code == 200
         assert ws.receive_json()['event'] == 'SESSION_CLOSED'
     assert not clients
+
+
+@pytest.mark.parametrize('role', ['PARENT', 'STUDENT'])
+def test_attendance_websocket_rejects_non_staff_roles(client, role):
+    db = SessionLocal()
+    user = User(full_name=f'{role} Test', username=f'{role.lower()}-ws-test', password_hash='unused', role=role)
+    db.add(user)
+    db.commit()
+    token = jwt.encode(
+        {'sub': str(user.id), 'role': role, 'exp': datetime.now(timezone.utc) + timedelta(minutes=5)},
+        settings.secret_key,
+        algorithm='HS256',
+    )
+    db.close()
+
+    with pytest.raises(WebSocketDisconnect) as error:
+        with client.websocket_connect(f'/ws/attendance?token={token}'):
+            pass
+    assert error.value.code == 1008
+
+
+@pytest.mark.parametrize('role_key', ['admin', 'guru'])
+def test_attendance_websocket_allows_existing_staff_roles(client, headers, role_key):
+    token = headers[role_key]['Authorization'][7:]
+    with client.websocket_connect(f'/ws/attendance?token={token}'):
+        pass

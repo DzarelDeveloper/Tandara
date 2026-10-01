@@ -145,6 +145,7 @@ def link_guardian(guardian_id: int, student_ids: list[int], relationship: str = 
     guardian = db.get(Guardian, guardian_id)
     if not guardian or not guardian.is_active: error(404, 'Wali aktif tidak ditemukan.', 'NOT_FOUND')
     students = validate_students(student_ids, db)
+    if not students: error(422, 'Pilih satu siswa.', 'STUDENT_REQUIRED')
     existing = db.scalars(select(GuardianStudent).where(GuardianStudent.guardian_id == guardian.id)).all()
     if existing and any(link.student_id != students[0].id for link in existing):
         error(422, 'Satu akun orang tua hanya dapat terhubung ke satu siswa.', 'MULTIPLE_STUDENTS_NOT_ALLOWED')

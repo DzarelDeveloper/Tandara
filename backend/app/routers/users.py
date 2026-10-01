@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -14,6 +14,11 @@ class UserIn(BaseModel):
     password: str = Field(min_length=8)
     role: str = 'GURU_PIKET'
     is_active: bool = True
+
+    @field_validator('full_name', 'username', mode='before')
+    @classmethod
+    def trim_identity(cls, value):
+        return value.strip() if isinstance(value, str) else value
 
 
 router = APIRouter()

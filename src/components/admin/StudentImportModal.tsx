@@ -12,13 +12,14 @@ import { studentsService } from '../../services/students.service';
 interface StudentImportModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onImported: () => Promise<void>;
 }
 
-export const StudentImportModal: React.FC<StudentImportModalProps> = ({ isOpen, onClose }) => {
+export const StudentImportModal: React.FC<StudentImportModalProps> = ({ isOpen, onClose, onImported }) => {
   const { showToast } = useToast();
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<{ total_rows:number; valid_rows:number; invalid_rows:number } | null>(null);
+  const [preview, setPreview] = useState<Awaited<ReturnType<typeof studentsService.previewImport>> | null>(null);
   const [busy, setBusy] = useState(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -30,7 +31,7 @@ export const StudentImportModal: React.FC<StudentImportModalProps> = ({ isOpen, 
 
   const handleImportSubmit = async () => {
     if (!file || !preview || preview.invalid_rows) return;
-    setBusy(true); try { await studentsService.importStudents(file); showToast({ type: 'success', message: 'Data siswa berhasil diimpor.' }); setSelectedFileName(null); setFile(null); setPreview(null); onClose(); } catch (e) { showToast({ type: 'error', message: e instanceof Error ? e.message : 'Impor gagal.' }); } finally { setBusy(false); }
+    setBusy(true); try { await studentsService.importStudents(file); await onImported(); showToast({ type: 'success', message: 'Data siswa berhasil diimpor.' }); setSelectedFileName(null); setFile(null); setPreview(null); onClose(); } catch (e) { showToast({ type: 'error', message: e instanceof Error ? e.message : 'Impor gagal.' }); } finally { setBusy(false); }
   };
   const handlePreview = async () => { if (!file) return; setBusy(true); try { setPreview(await studentsService.previewImport(file)); } catch (e) { showToast({ type: 'error', message: e instanceof Error ? e.message : 'Preview gagal.' }); } finally { setBusy(false); } };
 
@@ -39,7 +40,7 @@ export const StudentImportModal: React.FC<StudentImportModalProps> = ({ isOpen, 
       isOpen={isOpen}
       onClose={onClose}
       title="Impor Data Siswa Sekaligus"
-      subtitle="Unggah berkas CSV atau XLSX sesuai format template sekolah"
+      subtitle="Unggah berkas CSV UTF-8 sesuai format template sekolah"
       maxWidth="md"
     >
       <div className="space-y-4">
@@ -49,12 +50,13 @@ export const StudentImportModal: React.FC<StudentImportModalProps> = ({ isOpen, 
             <UploadCloud className="w-5 h-5" />
           </div>
           <p className="text-sm font-semibold text-slate-800">
-            Pilih atau seret berkas CSV / Excel (.xlsx)
+            Pilih berkas CSV
           </p>
-          <p className="text-xs text-slate-500 mt-1">Maksimal ukuran berkas 5 MB</p>
+          <p className="text-xs text-slate-500 mt-1">Gunakan template CSV; batas ukuran divalidasi server.</p>
           <input
             type="file"
-            accept=".csv, .xlsx, .xls"
+            accept=".csv"
+            disabled={busy}
             onChange={handleFileChange}
             className="hidden"
           />
@@ -71,6 +73,7 @@ export const StudentImportModal: React.FC<StudentImportModalProps> = ({ isOpen, 
               type="button"
             onClick={() => { setSelectedFileName(null); setFile(null); setPreview(null); }}
               className="text-slate-400 hover:text-slate-600 p-1"
+              disabled={busy}
               aria-label="Batalkan pilihan berkas"
             >
               <X className="w-4 h-4" />
@@ -86,6 +89,7 @@ export const StudentImportModal: React.FC<StudentImportModalProps> = ({ isOpen, 
           </p>
         </div>
 
+        {preview && preview.rows.filter((row) => !row.valid).map((row) => <p key={row.row_number} role="alert" className="text-xs text-red-700">Baris {row.row_number}: {row.errors.map((error) => `${error.field}: ${error.message}`).join('; ')}</p>)}
         {/* Actions */}
         <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2.5">
           {preview && <p className="mr-auto text-xs text-slate-600">{preview.total_rows} baris · {preview.valid_rows} valid · {preview.invalid_rows} invalid</p>}

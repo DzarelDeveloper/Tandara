@@ -36,6 +36,8 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
   const [studentId, setStudentId] = useState('');
   useEffect(() => { setFullName(parent?.fullName || ''); setPhone(parent?.phone || ''); setRelationship(parent?.relationship || 'Wali'); }, [parent]);
 
+  useEffect(() => { setEditing(false); setStudents([]); setStudentId(''); setConfirmAction(null); }, [parent?.id, isOpen]);
+
   const handleActionConfirm = async () => {
     if (confirmAction === 'status' && parent) {
       try { await parentsService.toggleStatus(parent.id, parent.accountStatus !== 'ACTIVE'); await onChanged(); showToast({ type: 'success', message: 'Status wali berhasil diperbarui.' }); }
@@ -92,7 +94,7 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
                 <span className="text-slate-400 block text-[10px] uppercase font-semibold">Username</span>
                 <span className="text-slate-800 font-mono flex items-center gap-1 mt-0.5">
                   <User className="w-3 h-3 text-slate-400" />
-                  @{parent.username}
+                  {parent.username ? `@${parent.username}` : 'Tanpa akun login'}
                 </span>
               </div>
             </div>
@@ -151,11 +153,11 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
           <div className="pt-6 border-t border-slate-200 space-y-2">
             <button
               type="button"
-              onClick={() => showToast({ type: 'info', message: 'Reset password wali belum tersedia di backend.' })}
+              disabled title="Reset password belum tersedia"
               className="w-full py-2.5 px-4 bg-white hover:bg-slate-50 text-slate-700 text-xs sm:text-sm font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors border border-slate-300 shadow-xs"
             >
               <KeyRound className="w-4 h-4 text-slate-500" />
-              Reset Password Sementara
+              Reset Password — Belum Tersedia
             </button>
 
             <button
@@ -164,7 +166,7 @@ export const ParentDetailDrawer: React.FC<ParentDetailDrawerProps> = ({
               className="w-full py-2.5 px-4 bg-red-50 hover:bg-red-100 text-red-700 text-xs sm:text-sm font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors border border-red-200"
             >
               <UserMinus className="w-4 h-4 text-red-600" />
-              Nonaktifkan Akun
+              {parent.accountStatus === 'ACTIVE' ? 'Nonaktifkan' : 'Aktifkan'} {parent.username ? 'Akun' : 'Wali'}
             </button>
           </div>
         </div>

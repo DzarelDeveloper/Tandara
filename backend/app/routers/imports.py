@@ -1,5 +1,6 @@
 import csv
 import io
+import re
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
-from ..main import ClassRoom, Guardian, Student, audit, error, require
+from ..main import ClassRoom, Guardian, Student, GuardianStudent, audit, error, require
 
 router = APIRouter(tags=['Imports'])
 
@@ -19,13 +20,18 @@ def import_result(rows, db):
         return None, {'total_rows':len(rows),'valid_rows':0,'invalid_rows':len(rows),'rows':[],'header_error':'Kolom wajib: nis,nama,kelas,jurusan,nama_wali,nomor_wali'}
     seen=set(); details=[]
     for number,row in enumerate(rows,2):
-        errors=[];nis=row['nis'].strip()
+        errors=[]
+        row={key: (value or '').strip() if isinstance(value, (str, type(None))) else value for key,value in row.items()}
+        nis=row['nis']
         if not nis: errors.append({'field':'nis','message':'NIS wajib diisi'})
         elif nis in seen: errors.append({'field':'nis','message':'NIS duplikat dalam file'})
         elif db.scalar(select(Student.id).where(Student.nis==nis)): errors.append({'field':'nis','message':'NIS sudah terdaftar'})
         seen.add(nis)
-        if not db.scalar(select(ClassRoom.id).where(ClassRoom.name==row['kelas'].strip(),ClassRoom.major==row['jurusan'].strip())):errors.append({'field':'kelas','message':'Kelas atau jurusan tidak ditemukan'})
-        if not row['nomor_wali'].strip().startswith(('0','62','+62')):errors.append({'field':'nomor_wali','message':'Nomor telepon Indonesia tidak valid'})
+        if len(nis)>20: errors.append({'field':'nis','message':'NIS maksimal 20 karakter'})
+        for field in ('nama','nama_wali'):
+            if len(row[field]) < 2: errors.append({'field':field,'message':'Nama minimal 2 karakter'})
+        if not db.scalar(select(ClassRoom.id).where(ClassRoom.name==row['kelas'].strip(),ClassRoom.major==row['jurusan'].strip(),ClassRoom.is_active.is_(True))):errors.append({'field':'kelas','message':'Kelas atau jurusan tidak ditemukan'})
+        if not re.fullmatch(r'(\+62|62|0)\d{8,13}', row['nomor_wali']):errors.append({'field':'nomor_wali','message':'Nomor telepon Indonesia tidak valid'})
         details.append({'row_number':number,'valid':not errors,'errors':errors,'data':row})
     return details, {'total_rows':len(rows),'valid_rows':sum(x['valid'] for x in details),'invalid_rows':sum(not x['valid'] for x in details),'rows':details}
 
@@ -59,12 +65,14 @@ async def import_students(file:UploadFile=File(...),db:Session=Depends(get_db),u
     if result['invalid_rows']:raise HTTPException(422,{'success':False,'message':'Validasi impor gagal.','errors':result,'code':'IMPORT_VALIDATION_ERROR'})
     prepared=[]
     for n,row in enumerate(rows,2):
-      nis=row['nis'].strip(); classroom=db.scalar(select(ClassRoom).where(ClassRoom.name==row['kelas'].strip(),ClassRoom.major==row['jurusan'].strip()))
+      nis=row['nis'].strip(); classroom=db.scalar(select(ClassRoom).where(ClassRoom.name==row['kelas'].strip(),ClassRoom.major==row['jurusan'].strip(),ClassRoom.is_active.is_(True)))
       prepared.append((nis,row,classroom))
     try:
       for nis,row,classroom in prepared:
         guardian=Guardian(full_name=row['nama_wali'].strip(),phone_number=row['nomor_wali'].strip());db.add(guardian);db.flush()
-        db.add(Student(nis=nis,full_name=row['nama'].strip(),class_id=classroom.id,guardian_id=guardian.id))
+        student=Student(nis=nis,full_name=row['nama'].strip(),class_id=classroom.id,guardian_id=guardian.id)
+        db.add(student);db.flush()
+        db.add(GuardianStudent(guardian_id=guardian.id,student_id=student.id,relationship='Wali'))
       audit(db,u,'IMPORT','Student',None,f'Mengimpor {len(prepared)} siswa');db.commit()
     except Exception:
       db.rollback();raise
