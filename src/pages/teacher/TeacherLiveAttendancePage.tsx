@@ -120,7 +120,6 @@ async function captureFrame(video: HTMLVideoElement): Promise<{ blob: Blob; metr
 
 export const TeacherLiveAttendancePage: React.FC = () => {
   const { showBackendNotConnected, showToast } = useToast();
-  const benchmarkMode = import.meta.env.DEV && new URLSearchParams(window.location.search).get('benchmark') === '1';
   const [showSessionModal, setShowSessionModal] = useState(false);
   const [activeMode, setActiveMode] = useState<'CHECK_IN' | 'CHECK_OUT'>('CHECK_IN');
   const [changingSession, setChangingSession] = useState(false);
@@ -290,7 +289,7 @@ export const TeacherLiveAttendancePage: React.FC = () => {
       captureMetrics = captured.metrics;
       if (!scanInFlightRef.current || controller.signal.aborted) return { delayMs: defaultDelay, holdResult: false };
       requestStarted = performance.now();
-      const result = await attendanceService.scanFrame(sessionId, captured.blob, controller.signal, benchmarkMode);
+      const result = await attendanceService.scanFrame(sessionId, captured.blob, controller.signal);
       if (!mountedRef.current || controller.signal.aborted) return { delayMs: defaultDelay, holdResult: false };
       requestMs = performance.now() - requestStarted;
       networkFailureRef.current = 0;
@@ -305,11 +304,8 @@ export const TeacherLiveAttendancePage: React.FC = () => {
       const verifying = result.faces.some((face) => face.state === 'TRACKING' || face.state === 'VERIFYING' || (face.recognitionStatus === 'RECOGNIZED' && face.liveness === 'LIVENESS_PENDING'));
       const securityPending = result.faces.some((face) => face.recognitionStatus === 'RECOGNIZED' && face.trackState === 'VERIFIED' && face.liveness === 'LIVENESS_PENDING');
       verifyingStateRef.current = nextVisualVerificationState(verifyingStateRef.current.verifying, verifying, verifyingStateRef.current.missedFrames);
-      const benchmarkReady = Boolean(result.benchmarkMode && result.faces.some((face) => face.benchmarkReady));
-      setScanState(recorded.length ? 'SUCCESS' : failed ? 'ERROR' : securityPending ? 'PROCESSING' : verifyingStateRef.current.verifying || benchmarkReady ? 'VERIFYING' : duplicate ? 'DUPLICATE' : result.faces.length ? 'UNKNOWN' : 'DETECTING');
-      setScanMessage(benchmarkMode
-        ? benchmarkReady ? 'BENCHMARK MODE — IDENTITY + LIVENESS READY; ATTENDANCE NOT SAVED' : securityPending ? 'Verifikasi keamanan...' : verifying ? 'Memverifikasi wajah...' : result.faces.length ? 'Wajah belum dikenali. Mencoba kembali...' : 'Menunggu siswa...'
-        : recorded.length ? `${recorded.length} presensi berhasil dicatat.` : failed ? result.faces.find((face) => face.message)?.message ?? 'Sebagian presensi gagal dicatat. Mencoba kembali...' : duplicate ? 'Presensi sudah tercatat.' : result.livenessMode === 'MANUAL_ONLY' ? 'Presensi otomatis dinonaktifkan. Gunakan verifikasi manual oleh petugas.' : result.faces.some((face) => face.liveness === 'SPOOF_SUSPECTED') ? 'Perlu pemeriksaan petugas.' : securityPending ? 'Verifikasi keamanan...' : verifying ? 'Memverifikasi wajah...' : result.faces.length ? 'Wajah belum dikenali. Mencoba kembali...' : 'Menunggu siswa...');
+      setScanState(recorded.length ? 'SUCCESS' : failed ? 'ERROR' : securityPending ? 'PROCESSING' : verifyingStateRef.current.verifying ? 'VERIFYING' : duplicate ? 'DUPLICATE' : result.faces.length ? 'UNKNOWN' : 'DETECTING');
+      setScanMessage(recorded.length ? `${recorded.length} presensi berhasil dicatat.` : failed ? result.faces.find((face) => face.message)?.message ?? 'Sebagian presensi gagal dicatat. Mencoba kembali...' : duplicate ? 'Presensi sudah tercatat.' : result.livenessMode === 'MANUAL_ONLY' ? 'Presensi otomatis dinonaktifkan. Gunakan verifikasi manual oleh petugas.' : result.faces.some((face) => face.liveness === 'SPOOF_SUSPECTED') ? 'Perlu pemeriksaan petugas.' : securityPending ? 'Verifikasi keamanan...' : verifying ? 'Memverifikasi wajah...' : result.faces.length ? 'Wajah belum dikenali. Mencoba kembali...' : 'Menunggu siswa...');
       for (const item of recorded) {
         addRecentDetection(fromScanAttendance(item));
       }
@@ -374,7 +370,7 @@ export const TeacherLiveAttendancePage: React.FC = () => {
       if (scanAbortRef.current === controller) scanAbortRef.current = null;
       scanInFlightRef.current = false;
     }
-  }, [addRecentDetection, benchmarkMode, clearScanScheduling, sessionId, showBackendNotConnected]);
+  }, [addRecentDetection, clearScanScheduling, sessionId, showBackendNotConnected]);
 
   useEffect(() => {
     if (!sessionId || !cameraStream) return;
@@ -522,7 +518,7 @@ export const TeacherLiveAttendancePage: React.FC = () => {
             <p>Status: {scanState}</p>
             {import.meta.env.DEV && lastLatencyMs !== null && <p>Latency HTTP terakhir: {lastLatencyMs.toFixed(0)} ms</p>}
             {import.meta.env.DEV && <p>Target start interval: {SCAN_TARGET_PERIOD_MS} ms · minimum idle: {SCAN_MIN_IDLE_MS} ms</p>}
-            {import.meta.env.DEV && <p>PERFORMANCE {benchmarkMode ? '· BENCHMARK MODE — ATTENDANCE NOT SAVED' : ''}</p>}
+            {import.meta.env.DEV && <p>PERFORMANCE</p>}
             {import.meta.env.DEV && performanceMetrics && <div className="font-mono text-[10px] space-y-0.5">
               <p>Scan rate {startToStartMs ? scanRatePerSecond(startToStartMs).toFixed(2) : '—'} /s · cycle {performanceMetrics.cycleMs.toFixed(0)} ms · start interval {startToStartMs?.toFixed(0) ?? '—'} ms</p>
               <p>Capture {performanceMetrics.captureMs.toFixed(1)} ms · encode {performanceMetrics.encodeMs.toFixed(1)} ms · request {performanceMetrics.requestMs.toFixed(1)} ms</p>

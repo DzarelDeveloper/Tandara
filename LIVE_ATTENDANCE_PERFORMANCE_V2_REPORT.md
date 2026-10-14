@@ -2,6 +2,8 @@
 
 **Scope:** Teacher/Guru-Piket live attendance only. Phase 2 code readiness is implemented; physical performance remains unverified. No Face Enrollment behavior was changed by this task.
 
+**Production cleanup note:** This is a historical Phase 2 report. Its development benchmark mode has since been removed from the application; only the separate offline resolution-evaluation harness remains.
+
 ## Scheduler and Observation Rate
 
 **Scheduler before:** Serial recursive `setTimeout` was already preventing overlapping requests, but the post-response wait was `EMA latency + 55% latency`, minimum 300 ms. For a 500 ms request the modeled cycle was about 1,275 ms, or 0.78 observations/s.
@@ -30,12 +32,12 @@ For an illustrative 500 ms processing cycle at the active 300 ms target: wait 60
 - Standard temporal verification: **PASS in automated coverage**; existing 3 consistent fresh observations spanning >=0.6 s remains unchanged.
 - Transient miss handling: **PASS in tests**; one fresh UNKNOWN/AMBIGUOUS is a bounded miss and does not enter the identity evidence window. A second consecutive weak miss clears the candidate evidence. Cached recognition remains non-fresh and does not count.
 - Strong identity contradiction: **PASS in tests**; a fresh recognized different student clears prior candidate observations before adding the new candidate. Evidence remains per-track.
-- Liveness: **PASS; unchanged and still required**. Benchmark mode cannot signal ready until the same verified identity and `LIVE` state pass.
-- Spoof blocking: **PASS in tests**; `SPOOF_SUSPECTED` does not reach attendance or benchmark-ready state.
+- Liveness: **PASS; unchanged and still required**. Automated attendance still requires the same verified identity and `LIVE` state.
+- Spoof blocking: **PASS in tests**; `SPOOF_SUSPECTED` does not reach attendance.
 - Multi-face: **PASS in existing scan tests**; per-face processing remains independent and one duplicate/unknown face does not globally stop other faces.
 - Unknown-person safety: **PASS in tests**; UNKNOWN remains non-attendance evidence; repeated UNKNOWN clears accumulated candidate evidence.
 - Duplicate attendance: **PASS in existing tests**; duplicate decision stays per student/track/session/mode, without a global scan pause.
-- Benchmark persistence protection: **PASS in tests**. `?benchmark=1` is honored only in Vite DEV and backend non-production; it still requires active session, identity verification, and LIVE liveness, then returns `benchmarkReady` without `take()`, DB writes, audit, notifications, or attendance WebSocket publication. Production rejects the benchmark flag.
+- Benchmark persistence protection: this historical implementation was removed during production cleanup. The scan API no longer accepts a benchmark flag and always follows the normal attendance flow after its existing identity, liveness, and attendance checks.
 
 Normal attendance invariant remains: `RECOGNIZED` alone is insufficient; the server still requires VERIFIED identity, LIVE liveness, active student/session, and existing schedule/duplicate rules. Thresholds were not weakened.
 
@@ -72,7 +74,7 @@ The browser session was logged out and no authorized live teacher session/camera
 - Before/after physical scan rate and VERIFIED/LIVE/attendance-ready times
 - 1280×720, 960×540, 800×450, and 640×360 face-positive quality/distance comparison
 
-The benchmark mode is code-ready for an authorized dev camera session and will not create attendance records, but it has not been physically exercised. **Overall: CODE READY; PHYSICAL PERFORMANCE UNVERIFIED.**
+The removed development benchmark mode was not physically exercised. Offline resolution evaluation is outside the scope of this application cleanup, and production resolution equivalence remains unproven. **Overall: PHYSICAL PERFORMANCE UNVERIFIED.**
 
 ## Phase 2 Files
 

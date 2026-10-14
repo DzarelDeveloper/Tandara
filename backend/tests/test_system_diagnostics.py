@@ -15,6 +15,7 @@ def test_health_checks_database_without_exposing_configuration(client):
     assert data['status'] == 'ok'
     assert data['database'] == {'status': 'connected', 'type': 'sqlite'}
     assert data['face_recognition'] == face_engine.status.value
+    assert 'benchmark_enabled' not in data
     serialized = response.text.lower()
     assert 'database_url' not in serialized
     assert 'tandara_test.db' not in serialized
