@@ -192,7 +192,7 @@ function Start-Tandara {
     New-Item -ItemType Directory -Path $LogDir,$RuntimeDir -Force | Out-Null
     $env:APP_ENV = 'development'
     $env:PYTHONPATH = $BackendDir
-    $env:FRONTEND_ORIGIN = "http://localhost:$FrontendPort,http://127.0.0.1:$FrontendPort,http://localhost:3000,http://localhost:5173"
+    $env:FRONTEND_ORIGIN = "http://localhost:$FrontendPort"
     $env:VITE_API_URL = $BackendUrl
 
     $health = Get-TandaraHealth
@@ -205,7 +205,7 @@ function Start-Tandara {
         Write-Status '[1/4] Backend starting...'
         Set-Content -Path $BackendLog -Value ''
         Set-Content -Path $BackendErrorLog -Value ''
-        $StartedBackend = Start-Process -FilePath $python -ArgumentList @('-m','uvicorn','app.main:app','--host','127.0.0.1','--port',"$BackendPort") -WorkingDirectory $BackendDir -RedirectStandardOutput $BackendLog -RedirectStandardError $BackendErrorLog -PassThru -WindowStyle Hidden
+        $StartedBackend = Start-Process -FilePath $python -ArgumentList @('-m','uvicorn','app.main:app','--host','127.0.0.1','--port',"$BackendPort") -WorkingDirectory $ProjectRoot -RedirectStandardOutput $BackendLog -RedirectStandardError $BackendErrorLog -PassThru -WindowStyle Hidden
         $StartedBackend | Select-Object -ExpandProperty Id | Set-Content (Join-Path $RuntimeDir 'backend.pid')
         Write-Status '[2/4] Waiting for backend health (max 30 seconds)...'
         $health = Wait-Backend 30

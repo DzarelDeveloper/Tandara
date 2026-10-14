@@ -24,6 +24,8 @@ $BackendErrorLog = Join-Path $LogDir "backend-error-$LogRunId.log"
 $FrontendLog = Join-Path $LogDir "frontend-$LogRunId.log"
 $FrontendErrorLog = Join-Path $LogDir "frontend-error-$LogRunId.log"
 foreach ($log in @($BackendLog, $BackendErrorLog, $FrontendLog, $FrontendErrorLog)) { Set-Content -Path $log -Value '' }
+$env:FRONTEND_ORIGIN = "http://localhost:$FrontendPort"
+$env:VITE_API_URL = $BackendUrl
 
 Stop-TandaraTrackedProcesses $ProjectRoot
 $BackendPid = $null
@@ -42,7 +44,7 @@ if ($health) {
     Write-TandaraStatus 'START' 'Backend'
     $env:PYTHONPATH = 'backend'
     $env:APP_ENV = 'development'
-    $backendStart = Start-Process -FilePath $PythonExe -ArgumentList @('-m', 'uvicorn', 'app.main:app', '--host', '0.0.0.0', '--port', '8000') -WorkingDirectory $ProjectRoot -RedirectStandardOutput $BackendLog -RedirectStandardError $BackendErrorLog -PassThru -WindowStyle Hidden
+    $backendStart = Start-Process -FilePath $PythonExe -ArgumentList @('-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8000') -WorkingDirectory $ProjectRoot -RedirectStandardOutput $BackendLog -RedirectStandardError $BackendErrorLog -PassThru -WindowStyle Hidden
     $BackendPid = $backendStart.Id
     Save-TandaraState $ProjectRoot $BackendPid $null
     $health = Wait-TandaraBackend 30

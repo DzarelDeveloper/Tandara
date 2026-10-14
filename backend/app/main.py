@@ -17,10 +17,6 @@ TZ=ZoneInfo(settings.timezone); pwd=PasswordHasher(); clients:set[WebSocket]=set
 def localnow(): return datetime.now(TZ).replace(tzinfo=None)
 def error(code,msg,code_name='VALIDATION_ERROR'): raise HTTPException(code, {'success':False,'message':msg,'errors':{},'code':code_name})
 def audit(db,u,action,typ,eid,desc): db.add(AuditLog(user_id=u.id if u else None,action=action,entity_type=typ,entity_id=str(eid) if eid else None,description=desc))
-def current_user(authorization: str|None = None, db:Session=Depends(get_db)):
-    from fastapi import Header
-    # Header injection is wired below through dependency wrapper.
-    error(401,'Sesi tidak valid.','UNAUTHORIZED')
 async def broadcast(event,data):
     message={'event':event,'timestamp':datetime.now(TZ).isoformat(),'data':data}
     for ws in list(clients):
@@ -39,11 +35,13 @@ def require(*roles):
         if u.role not in roles: error(403,'Anda tidak memiliki akses untuk aksi ini.','FORBIDDEN')
         return u
     return dep
-def attendance_out(a): return {'id':str(a.id),'date':a.attendance_date.isoformat(),'studentId':str(a.student_id),'studentName':a.student.full_name,'nis':a.student.nis,'className':a.student.classroom.name,'checkInTime':a.check_in_time.isoformat() if a.check_in_time else None,'checkOutTime':a.check_out_time.isoformat() if a.check_out_time else None,'status':a.status,'isCorrected':bool(a.notes),'correctionReason':a.notes,'parentNotified':False}
+def attendance_out(a):
+ s=a.student; c=s.classroom if s is not None else None
+ return {'id':str(a.id),'date':a.attendance_date.isoformat(),'studentId':str(a.student_id),'studentName':s.full_name if s else None,'nis':s.nis if s else None,'className':c.name if c else None,'checkInTime':a.check_in_time.isoformat() if a.check_in_time else None,'checkOutTime':a.check_out_time.isoformat() if a.check_out_time else None,'status':a.status,'isCorrected':bool(a.notes),'correctionReason':a.notes,'parentNotified':False}
 class GuardianIn(BaseModel): full_name:str; phone_number:str=Field(pattern=r'^(\+62|62|0)\d{8,13}$')
 class SessionIn(BaseModel): mode:str; camera_source:str=str(settings.camera_source)
 class ManualIn(BaseModel): student_id:int; mode:str; reason:str=Field(min_length=3); captured_at:datetime|None=None
-class LeaveIn(BaseModel): student_id:int; leave_date:date; leave_type:str; reason:str=Field(min_length=3)
+class LeaveIn(BaseModel): student_id:int; leave_date:date; leave_type:str=Field(pattern=r'^(SICK|PERMISSION|DISPENSATION)$'); reason:str=Field(min_length=3)
 class Patch(BaseModel): status:str|None=None; notes:str|None=None; check_in_time:datetime|None=None; check_out_time:datetime|None=None
 @asynccontextmanager
 async def lifespan(app):
@@ -86,7 +84,11 @@ def health():
     except Exception:
         # Health output deliberately does not expose connection strings, paths, or driver errors.
         pass
-    return {'success': True, 'message': 'Backend Tandara aktif', 'data': {'status': 'ok', 'database': database, 'face_recognition': face_engine.status.value}}
+    return {'success': True, 'message': 'Backend Tandara aktif', 'data': {
+        'status': 'ok',
+        'database': database,
+        'face_recognition': face_engine.status.value,
+    }}
 # Register attendance, leave, and WebSocket routes in the default ASGI app too.
 # This keeps `uvicorn app.main:app` and the test entrypoint behaviour identical.
 from .routers.dashboards import router as dashboards_router

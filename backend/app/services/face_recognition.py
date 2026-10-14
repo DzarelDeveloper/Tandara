@@ -260,6 +260,7 @@ class FaceRecognitionService:
         if track.student_id != student_id:
             track.attendance_attempted = False
             track.verified_until = 0.0
+            track.verified_at = None
             track.liveness_samples.clear()
         track.recognition_status = status
         track.student_id = student_id
@@ -363,8 +364,15 @@ class FaceRecognitionService:
             liveness_started = time.perf_counter()
             update_liveness(track, face, now=now, quality_ok=usable)
             liveness_ms = (time.perf_counter() - liveness_started) * 1000
-            verification_ms = ((track.verified_at - track.first_seen) * 1000
-                               if track.verified_at is not None and track.first_seen is not None else None)
+            identity_verified = bool(
+                track.verified_student_id == result.student_id
+                and result.student_id is not None
+                and track.state in ('VERIFIED', 'ATTENDED')
+            )
+            verification_ms = (
+                (track.verified_at - track.first_seen) * 1000
+                if identity_verified and track.verified_at is not None and track.first_seen is not None else None
+            )
             result.telemetry.update({
                 'liveness_state': track.liveness_state, 'liveness_signals': track.liveness_signals,
                 'verification_path': track.verification_path, 'verification_latency_ms': verification_ms,

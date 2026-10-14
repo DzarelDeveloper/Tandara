@@ -17,7 +17,7 @@ class StudentIn(BaseModel):
  full_name:str=Field(min_length=2, max_length=120)
  class_id:int
  guardian_id:int|None=None
- gender:str|None=None
+ gender:str|None=Field(default=None, pattern=r'^(L|P)$')
  is_active:bool=True
 
  @field_validator('nis', 'full_name', mode='before')

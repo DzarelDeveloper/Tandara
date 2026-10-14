@@ -62,23 +62,23 @@ def leaves(db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET')
 
 @router.post('/api/leave-requests/{id}/approve')
 async def approve(id:int,body:LeaveApproveIn | None = None,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
-	x=db.get(LeaveRequest,id)
-	if not x or x.status!='PENDING':fail(404,'Izin pending tidak ditemukan.')
-	note_in = (body.notes if body is not None else None) or (body.review_note if body is not None else None)
-	x.status='APPROVED';x.reviewed_by=u.id;x.reviewed_at=localnow()
-	if note_in and len(note_in.strip())>0:
-	    x.review_note = note_in.strip()
-	a=db.scalar(select(Attendance).where(Attendance.student_id==x.student_id,Attendance.attendance_date==x.leave_date)) or Attendance(student_id=x.student_id,attendance_date=x.leave_date,created_by=u.id);db.add(a);a.status='SICK' if x.leave_type=='SICK' else 'EXCUSED';a.notes=x.reason
-	submitter=db.get(User,x.submitted_by)
-	notifications=[notification_service.create_for_user(db,recipient_user_id=submitter.id,student=x.student,notification_type='LEAVE_APPROVED',title='Pengajuan izin disetujui',message=f'Pengajuan izin {x.student.full_name} telah disetujui.',payload={'leave_request_id':x.id,'status':'APPROVED'})] if submitter and submitter.role=='PARENT' else []
-	audit(db,u,'APPROVE','LeaveRequest',id,x.review_note or 'Izin disetujui');db.commit();await notification_service.publish(notifications);return {'success':True}
+    x=db.get(LeaveRequest,id)
+    if not x or x.status!='PENDING':fail(404,'Izin pending tidak ditemukan.')
+    note_in = (body.notes if body is not None else None) or (body.review_note if body is not None else None)
+    x.status='APPROVED';x.reviewed_by=u.id;x.reviewed_at=localnow()
+    if note_in and len(note_in.strip())>0:
+        x.review_note = note_in.strip()
+    a=db.scalar(select(Attendance).where(Attendance.student_id==x.student_id,Attendance.attendance_date==x.leave_date)) or Attendance(student_id=x.student_id,attendance_date=x.leave_date,created_by=u.id);db.add(a);a.status='SICK' if x.leave_type=='SICK' else 'EXCUSED';a.notes=x.reason
+    submitter=db.get(User,x.submitted_by)
+    notifications=[notification_service.create_for_user(db,recipient_user_id=submitter.id,student=x.student,notification_type='LEAVE_APPROVED',title='Pengajuan izin disetujui',message=f'Pengajuan izin {x.student.full_name} telah disetujui.',payload={'leave_request_id':x.id,'status':'APPROVED'})] if submitter and submitter.role=='PARENT' else []
+    audit(db,u,'APPROVE','LeaveRequest',id,x.review_note or 'Izin disetujui');db.commit();await notification_service.publish(notifications);return {'success':True}
 
 @router.post('/api/leave-requests/{id}/reject')
 async def reject(id:int,body:dict,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
-	x=db.get(LeaveRequest,id);reason=body.get('rejectionReason')
-	if not x or x.status!='PENDING':fail(404,'Izin pending tidak ditemukan.')
-	if not reason or len(reason)<3:fail(422,'Alasan penolakan wajib diisi.')
-	x.status='REJECTED';x.reviewed_by=u.id;x.reviewed_at=localnow();x.review_note=reason
-	submitter=db.get(User,x.submitted_by)
-	notifications=[notification_service.create_for_user(db,recipient_user_id=submitter.id,student=x.student,notification_type='LEAVE_REJECTED',title='Pengajuan izin ditolak',message=f'Pengajuan izin {x.student.full_name} ditolak.',payload={'leave_request_id':x.id,'status':'REJECTED'})] if submitter and submitter.role=='PARENT' else []
-	audit(db,u,'REJECT','LeaveRequest',id,reason);db.commit();await notification_service.publish(notifications);return {'success':True}
+    x=db.get(LeaveRequest,id);reason=body.get('rejectionReason')
+    if not x or x.status!='PENDING':fail(404,'Izin pending tidak ditemukan.')
+    if not reason or len(reason)<3:fail(422,'Alasan penolakan wajib diisi.')
+    x.status='REJECTED';x.reviewed_by=u.id;x.reviewed_at=localnow();x.review_note=reason
+    submitter=db.get(User,x.submitted_by)
+    notifications=[notification_service.create_for_user(db,recipient_user_id=submitter.id,student=x.student,notification_type='LEAVE_REJECTED',title='Pengajuan izin ditolak',message=f'Pengajuan izin {x.student.full_name} ditolak.',payload={'leave_request_id':x.id,'status':'REJECTED'})] if submitter and submitter.role=='PARENT' else []
+    audit(db,u,'REJECT','LeaveRequest',id,reason);db.commit();await notification_service.publish(notifications);return {'success':True}
