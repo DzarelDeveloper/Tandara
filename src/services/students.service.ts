@@ -15,6 +15,36 @@ export interface CreateStudentPayload {
   guardianId?: string | null;
 }
 
+export type StudentImportField = 'nis' | 'full_name' | 'class_name' | 'major' | 'gender' | 'guardian_name' | 'guardian_phone';
+export type StudentImportMapping = Partial<Record<StudentImportField, number>>;
+
+export interface StudentImportRow {
+  row_number: number;
+  status: 'valid' | 'duplicate' | 'invalid';
+  valid: boolean;
+  errors: Array<{ field: string; message: string }>;
+  data: Record<string, string>;
+}
+
+export interface StudentImportPreview {
+  total_rows: number;
+  valid_rows: number;
+  duplicate_rows: number;
+  invalid_rows: number;
+  headers: Array<{ index: number; label: string }>;
+  mapping: StudentImportMapping;
+  mapping_required: boolean;
+  rows: StudentImportRow[];
+}
+
+export interface StudentImportResult {
+  imported_count: number;
+  skipped_count: number;
+  failed_count: number;
+  duplicate_rows: number;
+  rows: StudentImportRow[];
+}
+
 export const studentsService = {
   /**
    * Fetch the active student list from FastAPI.
@@ -65,14 +95,18 @@ export const studentsService = {
     throw new Error('Enrolmen wajah harus diproses oleh layanan biometrik tepercaya; endpoint tidak menerima embedding dari browser.');
   },
 
-  async importStudents(file: File): Promise<{ importedCount: number }> {
+  async importStudents(file: File, mapping: StudentImportMapping, duplicatePolicy: 'skip' | 'abort'): Promise<StudentImportResult> {
     const formData = new FormData();
     formData.append('file', file);
-    return apiRequest<{ importedCount: number }>('/api/students/import', { method: 'POST', body: formData });
+    formData.append('mapping', JSON.stringify(mapping));
+    formData.append('duplicate_policy', duplicatePolicy);
+    return apiRequest<StudentImportResult>('/api/students/import', { method: 'POST', body: formData });
   },
-  async previewImport(file: File): Promise<{ total_rows:number; valid_rows:number; invalid_rows:number; rows: Array<{ row_number:number; valid:boolean; errors:Array<{field:string;message:string}> }> }> {
-    const formData = new FormData(); formData.append('file', file);
-    return apiRequest('/api/students/import/preview', { method: 'POST', body: formData });
+  async previewImport(file: File, mapping?: StudentImportMapping): Promise<StudentImportPreview> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (mapping) formData.append('mapping', JSON.stringify(mapping));
+    return apiRequest<StudentImportPreview>('/api/students/import/preview', { method: 'POST', body: formData });
   },
   async downloadTemplate(): Promise<void> {
     const response = await apiRequestBlob('/api/students/import-template.csv');

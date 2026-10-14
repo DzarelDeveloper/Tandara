@@ -119,8 +119,11 @@ def test_import_links_immediately_and_rejects_short_rows(client, headers, classr
     malformed = {'file': ('short.csv', template.text + 'AUDIT-SHORT,Short\n', 'text/csv')}
     preview = data(client.post('/api/students/import/preview', headers=h, files=malformed))
     assert preview['invalid_rows'] == 1
-    assert client.post('/api/students/import', headers=h, files=malformed).status_code == 422
-    assert client.post('/api/students/import/preview', headers=h, files={'file': ('bad.xlsx', b'fake', 'application/octet-stream')}).status_code == 415
+    imported = data(client.post('/api/students/import', headers=h, files=malformed))
+    assert imported['imported_count'] == 0 and imported['failed_count'] == 1
+    assert 'AUDIT-SHORT' not in [row['nis'] for row in data(client.get('/api/students', headers=h))]
+    invalid_xlsx = client.post('/api/students/import/preview', headers=h, files={'file': ('bad.xlsx', b'fake', 'application/octet-stream')})
+    assert invalid_xlsx.status_code == 422 and invalid_xlsx.json()['code'] == 'IMPORT_FILE_INVALID'
 
 
 def test_empty_guardian_link_returns_validation_error(client, headers, student, guardian):

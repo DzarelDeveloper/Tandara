@@ -249,6 +249,12 @@ Webcam bawaan atau USB dapat langsung dipilih dari browser. Untuk menggunakan ka
 
 Jika kamera tidak muncul, tutup aplikasi lain yang sedang menggunakannya, periksa izin kamera browser/OS, lalu muat ulang halaman. Di Ubuntu, pastikan perangkat terlihat sebagai `/dev/video*`.
 
+## Import Siswa dari Excel
+
+Admin IT dapat membuka **Siswa & Wajah → Import Excel**, lalu memilih atau menarik file `.xlsx` atau `.csv` ke area unggah. Baris pertama harus berisi header; NIS/NISN, nama siswa, dan kelas/rombel wajib dipetakan. Header umum dikenali otomatis, dan kolom lain dapat dipetakan manual. Jurusan digunakan untuk membedakan kelas bernama sama; jika tidak disediakan, nama kelas harus cocok dengan tepat satu kelas aktif. Gender dan pasangan kolom nama/nomor wali bersifat opsional.
+
+Preview menandai baris valid, NIS duplikat, dan data invalid beserta nomor baris serta alasannya. Secara default duplikat dilewati tanpa menimpa data lama; Admin juga dapat membatalkan seluruh batch jika ada duplikat. Baris valid diimport dalam satu transaksi; baris invalid tidak dimasukkan. Ukuran file maksimum 5 MB dan jumlah data maksimum 2.000 baris.
+
 ## Konfigurasi
 
 Konfigurasi utama berada di `.env`; gunakan `.env.example` sebagai dasar. Beberapa nilai penting:

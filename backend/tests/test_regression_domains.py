@@ -97,7 +97,11 @@ def test_import_template_preview_validation_and_import(client, actors, headers, 
     preview = client.post('/api/students/import/preview', headers=headers['admin'], files={'file': ('x.csv', csv, 'text/csv')}); assert preview.status_code == 200 and preview.json()['data']['valid_rows'] == 1
     db = SessionLocal(); assert db.query(Student).count() == 0; db.close()
     bad = 'nis,nama,kelas,jurusan,nama_wali,nomor_wali\nDUP,A,XII-Test,IPA,W,0812\nDUP,B,XII-Test,IPA,W,0812\n'
-    assert client.post('/api/students/import', headers=headers['admin'], files={'file': ('x.csv', bad, 'text/csv')}).status_code == 422
+    partial = client.post('/api/students/import', headers=headers['admin'], files={'file': ('x.csv', bad, 'text/csv')})
+    assert partial.status_code == 200
+    assert partial.json()['data']['imported_count'] == 0
+    assert partial.json()['data']['skipped_count'] == 1
+    assert partial.json()['data']['failed_count'] == 1
     db = SessionLocal(); assert db.query(Student).count() == 0; db.close()
     assert client.post('/api/students/import', headers=headers['admin'], files={'file': ('x.csv', csv, 'text/csv')}).status_code == 200
 

@@ -5,5 +5,5 @@ export interface AdminDashboardStats { activeStudents:number; activeClasses:numb
 export interface TeacherDashboardStats { presentToday:number; lateToday:number; excusedToday:number; notPresent:number; faceEngine:string; session: { id:string; mode:string; cameraSource:string; status:string } | null; recentAttendance: AttendanceRecord[]; }
 export const dashboardService = {
   admin: () => apiRequest<AdminDashboardStats>('/api/dashboard/admin'),
-  teacher: () => apiRequest<TeacherDashboardStats>('/api/dashboard/teacher'),
+  teacher: (attendanceDate: string) => apiRequest<TeacherDashboardStats>(`/api/dashboard/teacher?attendance_date=${encodeURIComponent(attendanceDate)}`),
 };
