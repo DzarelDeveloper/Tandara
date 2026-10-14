@@ -135,7 +135,7 @@ Tandara tidak bergantung pada Gemini untuk deteksi atau pengenalan wajah.
 | --- | --- |
 | Admin IT | Mengelola data sekolah, pengguna, relasi wali, enrollment wajah, serta diagnostik sistem. |
 | Guru Piket | Menjalankan sesi presensi, memantau hasil scan, mengoreksi data, menangani izin, dan membuat laporan. |
-| Orang Tua / Wali | Melihat profil dan siswa yang secara eksplisit ditautkan ke akun; monitoring real-time dan notifikasi masih dikembangkan. |
+| Orang Tua / Wali | Melihat profil, siswa yang ditautkan ke akun, riwayat presensi, dan notifikasi persisten/realtime. Push notification Firebase/FCM belum tersedia. |
 
 ## Struktur Project
 
@@ -190,30 +190,30 @@ File ONNX dan data biometrik sengaja tidak disimpan di Git. Pastikan kedua model
 
 ### Ubuntu
 
-Setup pertama kali:
+Jalur resmi untuk development:
 
 ```bash
 ./setup.sh
-```
-
-Mulai Tandara:
-
-```bash
 ./start.sh
 ```
 
-Tekan `Ctrl+C` untuk menghentikan hanya service yang dimulai oleh launcher. Service Tandara sehat yang sudah berjalan akan digunakan kembali.
+Setup memasang dependency dan memeriksa model, tanpa menimpa `.env` yang sudah ada. `start.sh` menjalankan backend dan frontend, menggunakan ulang service Tandara yang sudah sehat, dan `Ctrl+C` menghentikan hanya proses yang dimulai olehnya. Jika launcher ditutup paksa, jalankan `./stop.sh`; script ini hanya menghentikan proses tercatat yang command line-nya cocok dengan project ini.
 
-Secara default launcher hanya membuka layanan pada komputer lokal. Untuk akses LAN, gunakan `./start.sh --lan` atau `./start-tandara.sh --lan`; keduanya mengikat layanan hanya ke IPv4 private yang terdeteksi sebagai rute utama. Alamat dapat ditentukan eksplisit dengan `./start.sh --lan 192.168.x.x` atau `./start-tandara.sh --lan-host 192.168.x.x`. Akses LAN bergantung pada routing dan firewall host, yang tidak dikonfigurasi atau diverifikasi launcher. Kamera browser pada perangkat lain umumnya membutuhkan secure context HTTPS.
+Binding default hanya lokal. Akses LAN opsional menggunakan `./start.sh --lan` atau `./start.sh --lan PRIVATE_IPV4`, yang membatasi binding ke alamat IPv4 private. Akses LAN bergantung pada routing/firewall host, yang tidak dikonfigurasi atau diverifikasi launcher; kamera browser di perangkat lain umumnya memerlukan secure context HTTPS.
+
+`start-tandara.sh` adalah launcher alternatif untuk status/diagnostik cepat (`--status`), menjalankan tanpa membuka browser (`--no-browser`), dan pemeriksaan kamera lokal. Ia tidak menggantikan `setup.sh`, mengharuskan `.venv/bin/python`, memakai port 8000/3000, dan berhenti melalui `Ctrl+C`; gunakan jalur resmi di atas untuk setup dan stop proses tercatat.
 
 ### Windows
 
-Setup pertama kali: jalankan `setup.bat`.
+Jalur resmi untuk development:
 
-Untuk penggunaan berikutnya: jalankan `start.bat`.
+1. Setup pertama kali: jalankan `setup.bat`.
+2. Jalankan aplikasi: jalankan `start.bat`.
+3. Jika perlu menghentikan proses setelah launcher tertutup paksa: jalankan `stop.bat`.
 
-Launcher Windows menggunakan PowerShell bawaan Windows untuk pemeriksaan health dan cleanup proses.
-Jika launcher ditutup paksa, `stop.bat` hanya menghentikan PID tercatat yang command line-nya masih cocok dengan project Tandara ini.
+Ketiganya menggunakan `scripts/tandara-dev.ps1`; pemeriksaan dan penghentian hanya berlaku pada proses yang tercatat dan terbukti milik project ini.
+
+`setup-tandara-windows.ps1` dan `start-tandara-windows.ps1` adalah jalur demo Windows alternatif. Setup ini menginisialisasi akun/data demo development lalu memulai launcher demo; gunakan hanya bila memang menginginkan seed demo. `stop-tandara-windows.ps1` menghentikan proses yang dicatat oleh jalur tersebut melalui `scripts/tandara-windows-common.ps1`. Jalur demo memeriksa hash model dan menggunakan port lokal 8000/3000. Untuk membuat arsip demo yang mengecualikan environment, database, log, dan embedding lokal, gunakan `prepare-demo-windows.ps1` dari mesin yang memiliki model.
 
 ### URL lokal
 
@@ -225,8 +225,6 @@ Jika launcher ditutup paksa, `stop.bat` hanya menghentikan PID tercatat yang com
 | Health diagnostics | <http://127.0.0.1:8000/api/health> |
 
 Database lokal yang ada dan file `.env` tidak di-reset atau ditimpa launcher/setup. Model ONNX harus tersedia pada lokasi yang dikonfigurasi; setup tidak mengunduh model.
-
-Untuk membuat paket demo Windows, gunakan `prepare-demo-windows.ps1` dari mesin yang sudah memiliki model. Paket tidak menyertakan database, `.env`, log, dependency terinstal, atau embedding wajah lokal.
 
 ### Akun demo development
 
@@ -275,8 +273,6 @@ npm run lint
 npm run build
 git diff --check
 ```
-
-Suite backend saat README ini diperbarui berisi 65 test untuk domain, autentikasi, parent linking, enrollment, face recognition, presensi, seed demo, dan diagnostik sistem.
 
 ## Keamanan dan Privasi
 
