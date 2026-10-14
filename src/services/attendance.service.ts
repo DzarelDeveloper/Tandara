@@ -175,15 +175,32 @@ function scheduleReconnect() {
 function connect() {
   if (holder.closed || holder.socket !== null) return;
   const token = localStorage.getItem(ACCESS_TOKEN_KEY);
-  if (!token) return;
+  if (!token) {
+    if (!holder.hasDisconnected) {
+      holder.hasDisconnected = true;
+      notifyDisconnect(true);
+    }
+    return;
+  }
   const endpoint = API_BASE_URL.replace(/^http/, 'ws') + `/ws/attendance?token=${encodeURIComponent(token)}`;
   let opened = false;
-  const socket = new WebSocket(endpoint);
+  let socket: WebSocket;
+  try {
+    socket = new WebSocket(endpoint);
+  } catch {
+    if (!holder.hasDisconnected) {
+      holder.hasDisconnected = true;
+      notifyDisconnect(true);
+    }
+    scheduleReconnect();
+    return;
+  }
   holder.socket = socket;
   socket.onopen = () => {
     opened = true;
     holder.currentDelayMs = RECONNECT_MIN_MS;
     if (holder.hasDisconnected) {
+      holder.hasDisconnected = false;
       notifyDisconnect(false);
     }
   };
@@ -196,13 +213,11 @@ function connect() {
     } catch { /* ignore malformed payloads silently */ }
   };
   const handleEnd = () => {
-    if (holder.socket === socket) {
-      holder.socket = null;
-    }
-    if (opened || holder.hasDisconnected) {
-      const first = !holder.hasDisconnected;
+    if (holder.socket !== socket) return;
+    holder.socket = null;
+    if (opened || !holder.hasDisconnected) {
       holder.hasDisconnected = true;
-      if (first) notifyDisconnect(true);
+      notifyDisconnect(true);
     }
     if (!holder.closed) scheduleReconnect();
   };
