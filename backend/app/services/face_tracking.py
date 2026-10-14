@@ -74,6 +74,7 @@ class FaceTrack:
         self.cache_expires_at = 0.0
         self.verified_until = 0.0
         self.verified_student_id = None
+        self.verified_at = None
         self.state = 'VERIFYING' if self.observations else 'TRACKING'
         if clear_liveness:
             self.liveness_state = 'LIVENESS_PENDING'

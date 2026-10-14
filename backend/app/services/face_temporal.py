@@ -30,12 +30,15 @@ def verify_observation(track: FaceTrack, *, status: str, student_id: int | None,
         return
     while track.observations and now - track.observations[0].timestamp > settings.face_temporal_window_seconds:
         track.observations.popleft()
+    if not track.observations:
+        track.verified_at = None
     if fresh:
         if status == 'RECOGNIZED' and student_id is not None:
             if any(item.student_id is not None and item.student_id != student_id for item in track.observations):
                 track.observations.clear()
                 track.evidence_count = 0
                 track.verified_student_id = None
+                track.verified_at = None
             track.consecutive_temporal_misses = 0
             track.observations.append(FaceObservation(student_id, similarity, quality, sharpness, now, ambiguity_margin))
         elif status in ('UNKNOWN_FACE', 'AMBIGUOUS_FACE', 'NO_ENROLLED_FACES'):
@@ -44,6 +47,7 @@ def verify_observation(track: FaceTrack, *, status: str, student_id: int | None,
                 track.observations.clear()
                 track.evidence_count = 0
                 track.verified_student_id = None
+                track.verified_at = None
                 track.consecutive_temporal_misses = 0
         else:
             track.consecutive_temporal_misses = 0
@@ -61,13 +65,16 @@ def verify_observation(track: FaceTrack, *, status: str, student_id: int | None,
     track.verified_student_id = None
     if status in ('UNKNOWN_FACE', 'AMBIGUOUS_FACE', 'NO_ENROLLED_FACES'):
         track.state = 'UNKNOWN'
+        track.verified_at = None
         return
     track.state = 'VERIFYING' if evidence else 'TRACKING'
     if status != 'RECOGNIZED' or not supporting:
+        track.verified_at = None
         return
     # Reject conflicting/unknown evidence in the entire short window, even if
     # one candidate has the highest similarity. Blur never enters this window.
     if len(supporting) != len(evidence):
+        track.verified_at = None
         return
     ranked_supporting = sorted(supporting, key=_rank_supporting, reverse=True)
     strong_count = sum(1 for item in ranked_supporting if _is_strong_fast_observation(item))
@@ -79,12 +86,15 @@ def verify_observation(track: FaceTrack, *, status: str, student_id: int | None,
     minimum = settings.face_fast_min_observations if fast else settings.face_temporal_min_observations
     span = settings.face_fast_min_span_seconds if fast else settings.face_temporal_min_span_seconds
     if len(supporting) < minimum:
+        track.verified_at = None
         return
     ordered = sorted(supporting, key=lambda item: item.timestamp)
     if ordered[-1].timestamp - ordered[0].timestamp < span:
+        track.verified_at = None
         return
     best = ranked_supporting[:minimum]
     if any(item.similarity is None or item.similarity < settings.face_recognition_threshold for item in best):
+        track.verified_at = None
         return
     track.verified_student_id = student_id
     track.verification_path = 'FAST' if fast else 'STANDARD'

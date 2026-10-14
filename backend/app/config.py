@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     secret_key: str
     access_token_expire_minutes: int = 480
     database_url: str = f'sqlite:///{BASE_DIR / "data" / "kena_scan.db"}'
-    frontend_origin: str = 'http://localhost:3000,http://localhost:5173'
+    frontend_origin: str = 'http://localhost:3000,http://127.0.0.1:3000'
     timezone: str = 'Asia/Jakarta'
     camera_source: str = '0'
     face_confidence_threshold: float = .75

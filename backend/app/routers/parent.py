@@ -18,7 +18,7 @@ router = APIRouter(prefix='/api/parent', tags=['Parent'])
 class ParentLeaveCreate(BaseModel):
     student_id: int
     leave_date: date
-    leave_type: str = Field(min_length=2, max_length=20)
+    leave_type: str = Field(pattern=r'^(SICK|PERMISSION|DISPENSATION)$')
     reason: str = Field(min_length=3, max_length=1000)
 
 

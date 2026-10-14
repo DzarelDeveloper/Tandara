@@ -4,8 +4,13 @@ set -Eeuo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_PORT="${TANDARA_BACKEND_PORT:-8000}"
 FRONTEND_PORT="${TANDARA_FRONTEND_PORT:-3000}"
-BACKEND_URL="http://127.0.0.1:${BACKEND_PORT}"
-FRONTEND_URL="http://localhost:${FRONTEND_PORT}"
+LAN_HOST="${TANDARA_LAN_HOST:-}"
+LAN_MODE=false
+if [[ -n "$LAN_HOST" ]]; then LAN_MODE=true; fi
+BACKEND_HOST="127.0.0.1"
+FRONTEND_HOST="127.0.0.1"
+BACKEND_URL="http://${BACKEND_HOST}:${BACKEND_PORT}"
+FRONTEND_URL="http://${FRONTEND_HOST}:${FRONTEND_PORT}"
 LOG_DIR="$ROOT/.logs"
 RUNTIME_DIR="$ROOT/.runtime"
 backend_pid=""
@@ -16,6 +21,41 @@ cleanup_done=false
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 note() { printf '%s\n' "$*"; }
+
+usage() {
+  cat <<'EOF'
+Usage: ./start.sh [--lan [PRIVATE_IPV4]] [--local] [--help]
+
+  --lan [PRIVATE_IPV4]  Bind only to a local private IPv4 interface.
+                        Without an address, detect the primary route address.
+  --local               Use loopback-only binding (default).
+EOF
+}
+
+detect_lan_host() {
+  "$PYTHON" - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+    sock.connect(('192.0.2.1', 9))
+    print(sock.getsockname()[0])
+PY
+}
+
+validate_lan_host() {
+  "$PYTHON" - "$1" <<'PY'
+import ipaddress
+import socket
+import sys
+
+address = ipaddress.IPv4Address(sys.argv[1])
+private_networks = tuple(map(ipaddress.ip_network, ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16')))
+if not any(address in network for network in private_networks):
+    raise SystemExit('LAN mode requires an RFC1918 private IPv4 address.')
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind((str(address), 0))
+PY
+}
 
 find_python() {
   local candidate
@@ -32,14 +72,24 @@ find_python() {
 }
 
 port_open() {
-  "$PYTHON" - "$1" <<'PY'
+  "$PYTHON" - "$1" "$2" <<'PY'
 import socket, sys
 connection = socket.socket()
 connection.settimeout(0.4)
-is_open = connection.connect_ex(('127.0.0.1', int(sys.argv[1]))) == 0
+is_open = connection.connect_ex((sys.argv[2], int(sys.argv[1]))) == 0
 connection.close()
 raise SystemExit(0 if is_open else 1)
 PY
+}
+
+port_listening() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -H -ltn "sport = :$1" 2>/dev/null | grep -q .
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | grep -q .
+  else
+    return 1
+  fi
 }
 
 show_port_owner() {
@@ -106,6 +156,28 @@ on_signal() { exit 130; }
 trap cleanup EXIT
 trap on_signal INT TERM
 
+while (($#)); do
+  case "$1" in
+    --lan)
+      LAN_MODE=true
+      if (($# > 1)) && [[ "$2" != -* ]]; then LAN_HOST="$2"; shift; fi
+      ;;
+    --local)
+      LAN_MODE=false
+      LAN_HOST=""
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      fail "Unknown option: $1"
+      ;;
+  esac
+  shift
+done
+
 [[ -d "$ROOT/backend" && -f "$ROOT/backend/app/main.py" ]] || fail "Backend entrypoint missing under $ROOT/backend."
 [[ -f "$ROOT/package.json" && -f "$ROOT/package-lock.json" ]] || fail 'Frontend package.json/package-lock.json is missing.'
 [[ -f "$ROOT/.env" ]] || fail "Root .env is missing. Run $ROOT/setup.sh; .env.example is the active backend config template."
@@ -121,7 +193,16 @@ PYTHON="$(find_python)" || fail "Python virtualenv not found. Supported location
 python_version="$($PYTHON -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 [[ "$(printf '%s\n' 3.12 "$python_version" | sort -V | head -n1)" == 3.12 ]] || fail "Python 3.12+ required; found $python_version."
 
-cd "$ROOT/backend"
+if [[ "$LAN_MODE" == true ]]; then
+  [[ -n "$LAN_HOST" ]] || LAN_HOST="$(detect_lan_host)" || fail 'Could not detect a LAN address; pass --lan PRIVATE_IPV4.'
+  validate_lan_host "$LAN_HOST" || fail "LAN address $LAN_HOST is not a private IPv4 address assigned to this machine."
+  BACKEND_HOST="$LAN_HOST"
+  FRONTEND_HOST="$LAN_HOST"
+  note 'LAN mode binds only to the selected private interface. Firewall and network reachability are not checked.'
+fi
+BACKEND_URL="http://${BACKEND_HOST}:${BACKEND_PORT}"
+FRONTEND_URL="http://${FRONTEND_HOST}:${FRONTEND_PORT}"
+
 mapfile -t runtime_values < <(PYTHONPATH="$ROOT/backend" APP_ENV=development "$PYTHON" - <<'PY'
 import importlib.util
 from app.config import settings
@@ -146,7 +227,7 @@ printf 'System      : Ubuntu/Linux\nPython      : %s (%s)\nNode        : %s\nFac
 mkdir -p "$LOG_DIR" "$RUNTIME_DIR"
 export APP_ENV=development
 export PYTHONPATH="$ROOT/backend"
-export FRONTEND_ORIGIN="http://localhost:${FRONTEND_PORT},http://127.0.0.1:${FRONTEND_PORT},http://localhost:3000,http://localhost:5173"
+export FRONTEND_ORIGIN="http://${FRONTEND_HOST}:${FRONTEND_PORT}"
 export VITE_API_URL="$BACKEND_URL"
 
 if backend_is_ready; then
@@ -155,13 +236,16 @@ elif [[ -n "$backend_state" ]]; then
   note "Tandara health responded but is not ready: $backend_state"
   show_port_owner "$BACKEND_PORT"
   fail "Backend is degraded; inspect its owner/logs. No existing process was stopped."
-elif port_open "$BACKEND_PORT"; then
+elif port_open "$BACKEND_PORT" "$BACKEND_HOST"; then
   show_port_owner "$BACKEND_PORT"
   fail "Port $BACKEND_PORT is occupied by a non-healthy/unidentified service. Inspect it before stopping anything; if it is a recorded Tandara child, run ./stop.sh."
+elif port_listening "$BACKEND_PORT"; then
+  show_port_owner "$BACKEND_PORT"
+  fail "Port $BACKEND_PORT already has a listener on another interface. Inspect it before starting another backend."
 else
   : >"$LOG_DIR/backend-dev.log"
   note '[1/4] Backend starting...'
-  (cd "$ROOT/backend" && exec setsid env APP_ENV=development PYTHONPATH="$ROOT/backend" FRONTEND_ORIGIN="$FRONTEND_ORIGIN" "$PYTHON" -m uvicorn app.main:app --host 127.0.0.1 --port "$BACKEND_PORT") >>"$LOG_DIR/backend-dev.log" 2>&1 &
+  (cd "$ROOT" && exec setsid env APP_ENV=development PYTHONPATH="$ROOT/backend" FRONTEND_ORIGIN="$FRONTEND_ORIGIN" "$PYTHON" -m uvicorn app.main:app --host "$BACKEND_HOST" --port "$BACKEND_PORT") >>"$LOG_DIR/backend-dev.log" 2>&1 &
   backend_pid=$!
   backend_started=true
   printf '%s\n' "$backend_pid" >"$RUNTIME_DIR/backend.pid"
@@ -178,14 +262,17 @@ fi
 
 if frontend_is_ready; then
   note "Frontend already running and healthy on :$FRONTEND_PORT"
-elif port_open "$FRONTEND_PORT"; then
+elif port_open "$FRONTEND_PORT" "$FRONTEND_HOST"; then
   show_port_owner "$FRONTEND_PORT"
   fail "Port $FRONTEND_PORT is occupied by a non-Tandara frontend. Inspect it before stopping anything; if it is a recorded Tandara child, run ./stop.sh."
+elif port_listening "$FRONTEND_PORT"; then
+  show_port_owner "$FRONTEND_PORT"
+  fail "Port $FRONTEND_PORT already has a listener on another interface. Inspect it before starting another frontend."
 else
   : >"$LOG_DIR/frontend-dev.log"
   note '[3/4] Backend ready'
   note '[4/4] Starting frontend...'
-  (cd "$ROOT" && exec setsid bash -c 'cd "$1"; npm run dev -- --port "$2" --strictPort; result=$?; exit "$result"' _ "$ROOT" "$FRONTEND_PORT") >>"$LOG_DIR/frontend-dev.log" 2>&1 &
+  (cd "$ROOT" && exec setsid bash -c 'cd "$1"; npm run dev -- --port "$2" --host "$3" --strictPort; result=$?; exit "$result"' _ "$ROOT" "$FRONTEND_PORT" "$FRONTEND_HOST") >>"$LOG_DIR/frontend-dev.log" 2>&1 &
   frontend_pid=$!
   frontend_started=true
   printf '%s\n' "$frontend_pid" >"$RUNTIME_DIR/frontend.pid"

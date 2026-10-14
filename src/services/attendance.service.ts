@@ -34,6 +34,8 @@ export interface FaceScanTelemetry {
   evidence_count?: number;
   verification_path?: string;
   verification_latency_ms?: number | null;
+  cached?: boolean;
+  track_id?: number;
   detection_to_attendance_ms?: number;
   frame_total_ms?: number;
   decode_ms?: number;
@@ -43,8 +45,8 @@ export interface FaceScanTelemetry {
   liveness_ms?: number;
   backend_total_ms?: number;
   bbox?: { x: number; y: number; width: number; height: number };
-  bbox_size_px?: { width: number; height: number };
-  frame_size_px?: { width: number; height: number };
+  bbox_size_px?: { width: number; height: number } | null;
+  frame_size_px?: { width: number; height: number } | null;
   detection_count?: number | null;
   candidate_count?: number;
   candidate_id?: number;
@@ -55,7 +57,7 @@ export interface FaceScanTelemetry {
   recognition_similarity?: number | null;
   second_best_similarity?: number | null;
   ambiguity_margin?: number | null;
-  timings_ms?: { index?: number; detection?: number; quality?: number; embedding?: number; matching?: number; tracking?: number; temporal?: number; liveness?: number; decode?: number; attendance_write?: number; realtime_publish?: number; backend_total?: number; total?: number };
+  timings_ms?: { index?: number | null; detection?: number | null; quality?: number | null; embedding?: number | null; matching?: number | null; tracking?: number | null; temporal?: number | null; liveness?: number | null; decode?: number | null; attendance_write?: number | null; realtime_publish?: number | null; backend_total?: number | null; total?: number | null };
 }
 
 export interface FaceScanResult {

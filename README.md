@@ -204,6 +204,8 @@ Mulai Tandara:
 
 Tekan `Ctrl+C` untuk menghentikan hanya service yang dimulai oleh launcher. Service Tandara sehat yang sudah berjalan akan digunakan kembali.
 
+Secara default launcher hanya membuka layanan pada komputer lokal. Untuk akses LAN, gunakan `./start.sh --lan` atau `./start-tandara.sh --lan`; keduanya mengikat layanan hanya ke IPv4 private yang terdeteksi sebagai rute utama. Alamat dapat ditentukan eksplisit dengan `./start.sh --lan 192.168.x.x` atau `./start-tandara.sh --lan-host 192.168.x.x`. Akses LAN bergantung pada routing dan firewall host, yang tidak dikonfigurasi atau diverifikasi launcher. Kamera browser pada perangkat lain umumnya membutuhkan secure context HTTPS.
+
 ### Windows
 
 Setup pertama kali: jalankan `setup.bat`.

@@ -9,7 +9,7 @@ import { AttendanceSchedulePanel } from '../../components/teacher/AttendanceSche
 import { StartSessionModal } from '../../components/teacher/StartSessionModal';
 import { useToast } from '../../context/ToastContext';
 import { LiveAttendanceEvent, mergeRecentAttendance, fromScanAttendance, fromAttendanceEvent, fromStoredAttendance } from '../../utils/recent-attendance';
-import { attendanceService, FaceScanResult, FaceScanTelemetry, TrackedFace } from '../../services/attendance.service';
+import { attendanceService, FaceScanResult, TrackedFace } from '../../services/attendance.service';
 import { systemService } from '../../services/system.service';
 import { ApiError, BackendDisconnectedError } from '../../services/api';
 import { CAMERA_STORAGE_KEY, cameraConstraints, enumerateVideoDevices, stopMediaStream } from '../../utils/camera';
@@ -28,21 +28,23 @@ const requestedScanHeight = Number(import.meta.env.VITE_LIVE_SCAN_MAX_HEIGHT ?? 
 const CAPTURE_MAX_WIDTH = Number.isFinite(requestedScanWidth) ? Math.max(320, Math.min(1920, Math.round(requestedScanWidth))) : 1280;
 const CAPTURE_MAX_HEIGHT = Number.isFinite(requestedScanHeight) ? Math.max(240, Math.min(1080, Math.round(requestedScanHeight))) : 720;
 const JPEG_QUALITY = 0.82;
+const CAPTURE_OPTIONS: CaptureOptions = { maxWidth: CAPTURE_MAX_WIDTH, maxHeight: CAPTURE_MAX_HEIGHT, jpegQuality: JPEG_QUALITY };
 const ERROR_HOLD_MS = 2400;
 const BOX_SMOOTH_ALPHA = 0.45;
 interface SmoothedBox { left: number; top: number; width: number; height: number }
 interface CaptureMetrics {
-  captureMs: number;
-  encodeMs: number;
+  captureDrawMs: number;
+  toBlobWaitMs: number;
   blobBytes: number;
   sourceWidth: number;
   sourceHeight: number;
   submittedWidth: number;
   submittedHeight: number;
 }
+interface CaptureOptions { maxWidth: number; maxHeight: number; jpegQuality: number }
 interface LiveScanMetrics extends CaptureMetrics {
-  requestMs: number;
-  cycleMs: number;
+  requestLatencyMs: number;
+  frontendCycleMs: number;
 }
 
 function formatWib(value: string): string {
@@ -87,28 +89,33 @@ const qualityCodes = new Set([
   'FACE_OUT_OF_FRAME',
 ]);
 
-async function captureFrame(video: HTMLVideoElement): Promise<{ blob: Blob; metrics: CaptureMetrics } | null> {
+async function captureFrame(
+  video: HTMLVideoElement,
+  canvas: HTMLCanvasElement,
+  options: CaptureOptions,
+): Promise<{ blob: Blob; metrics: CaptureMetrics } | null> {
   const captureStarted = performance.now();
   const sourceWidth = video.videoWidth;
   const sourceHeight = video.videoHeight;
   if (!sourceWidth || !sourceHeight) return null;
-  const scale = Math.min(1, CAPTURE_MAX_WIDTH / sourceWidth, CAPTURE_MAX_HEIGHT / sourceHeight);
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(sourceWidth * scale));
-  canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+  const scale = Math.min(1, options.maxWidth / sourceWidth, options.maxHeight / sourceHeight);
+  const submittedWidth = Math.max(1, Math.round(sourceWidth * scale));
+  const submittedHeight = Math.max(1, Math.round(sourceHeight * scale));
+  if (canvas.width !== submittedWidth) canvas.width = submittedWidth;
+  if (canvas.height !== submittedHeight) canvas.height = submittedHeight;
   const context = canvas.getContext('2d');
   if (!context) return null;
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
-  const captureMs = performance.now() - captureStarted;
-  const encodeStarted = performance.now();
-  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', JPEG_QUALITY));
-  const encodeMs = performance.now() - encodeStarted;
+  const captureDrawMs = performance.now() - captureStarted;
+  const toBlobStarted = performance.now();
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', options.jpegQuality));
+  const toBlobWaitMs = performance.now() - toBlobStarted;
   if (!blob) return null;
   return {
     blob,
     metrics: {
-      captureMs,
-      encodeMs,
+      captureDrawMs,
+      toBlobWaitMs,
       blobBytes: blob.size,
       sourceWidth,
       sourceHeight,
@@ -141,6 +148,7 @@ export const TeacherLiveAttendancePage: React.FC = () => {
   const [startToStartMs, setStartToStartMs] = useState<number | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const captureCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scanInFlightRef = useRef(false);
@@ -151,6 +159,7 @@ export const TeacherLiveAttendancePage: React.FC = () => {
   const mountedRef = useRef(true);
   const socketCleanupRef = useRef<(() => void) | null>(null);
   const lastScanStartedAtRef = useRef<number | null>(null);
+  const startIntervalMsRef = useRef<number | null>(null);
   const verifyingStateRef = useRef({ verifying: false, missedFrames: 0 });
   const smoothedBoxesRef = useRef<Map<number | string, SmoothedBox>>(new Map());
 
@@ -170,6 +179,7 @@ export const TeacherLiveAttendancePage: React.FC = () => {
     if (videoRef.current) videoRef.current.srcObject = null;
     smoothedBoxesRef.current.clear();
     lastScanStartedAtRef.current = null;
+    startIntervalMsRef.current = null;
   }, []);
 
   const refreshDevices = useCallback(async () => {
@@ -269,8 +279,7 @@ export const TeacherLiveAttendancePage: React.FC = () => {
     };
   }, [addRecentDetection, sessionId, refreshRecent, showBackendNotConnected]);
 
-  const scanFrame = useCallback(async (): Promise<ScanCycle> => {
-    const cycleStarted = performance.now();
+  const scanFrame = useCallback(async (cycleStarted: number): Promise<ScanCycle> => {
     const video = videoRef.current;
     const defaultDelay = SCAN_MIN_IDLE_MS;
     if (!sessionId || !streamRef.current || !video) return { delayMs: defaultDelay, holdResult: false };
@@ -281,19 +290,28 @@ export const TeacherLiveAttendancePage: React.FC = () => {
     scanTimeoutRef.current = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
     let captureMetrics: CaptureMetrics | null = null;
     let requestStarted = 0;
-    let requestMs = 0;
+    let requestLatencyMs = 0;
     try {
-      const captured = await captureFrame(video);
-      if (!mountedRef.current || controller.signal.aborted) return { delayMs: defaultDelay, holdResult: false };
-      if (!captured) return { delayMs: defaultDelay, holdResult: false };
+      const canvas = captureCanvasRef.current ?? (captureCanvasRef.current = document.createElement('canvas'));
+      const captured = await captureFrame(video, canvas, CAPTURE_OPTIONS);
+      if (!mountedRef.current || controller.signal.aborted) {
+        return { delayMs: defaultDelay, holdResult: false };
+      }
+      if (!captured) {
+        return { delayMs: defaultDelay, holdResult: false };
+      }
       captureMetrics = captured.metrics;
-      if (!scanInFlightRef.current || controller.signal.aborted) return { delayMs: defaultDelay, holdResult: false };
+      if (!scanInFlightRef.current || controller.signal.aborted) {
+        return { delayMs: defaultDelay, holdResult: false };
+      }
       requestStarted = performance.now();
       const result = await attendanceService.scanFrame(sessionId, captured.blob, controller.signal);
-      if (!mountedRef.current || controller.signal.aborted) return { delayMs: defaultDelay, holdResult: false };
-      requestMs = performance.now() - requestStarted;
+      if (!mountedRef.current || controller.signal.aborted) {
+        return { delayMs: defaultDelay, holdResult: false };
+      }
+      requestLatencyMs = performance.now() - requestStarted;
       networkFailureRef.current = 0;
-      setLastLatencyMs(requestMs);
+      setLastLatencyMs(requestLatencyMs);
       setFaces(result.faces);
       setManualOnly(result.livenessMode === 'MANUAL_ONLY');
       setLastTelemetry(result.faces.find((face) => face.telemetry)?.telemetry ?? null);
@@ -319,8 +337,7 @@ export const TeacherLiveAttendancePage: React.FC = () => {
         return { delayMs: 1200, holdResult: controller.signal.aborted };
       }
       if (error instanceof ApiError && error.telemetry) {
-        const telemetry = error.telemetry as unknown as FaceScanTelemetry;
-        setLastTelemetry(telemetry);
+        setLastTelemetry(error.telemetry);
       }
       const errorFaces = error instanceof ApiError && Array.isArray(error.data?.faces)
         ? error.data.faces as unknown as TrackedFace[]
@@ -362,9 +379,9 @@ export const TeacherLiveAttendancePage: React.FC = () => {
       }
       return { delayMs: Math.max(ERROR_HOLD_MS, Math.min(5000, 2000 * (2 ** Math.max(0, networkFailureRef.current - 1)))), holdResult: true };
     } finally {
-      requestMs = requestStarted ? performance.now() - requestStarted : 0;
+      requestLatencyMs = requestStarted ? performance.now() - requestStarted : 0;
       if (captureMetrics) {
-        setPerformanceMetrics({ ...captureMetrics, requestMs, cycleMs: performance.now() - cycleStarted });
+        setPerformanceMetrics({ ...captureMetrics, requestLatencyMs, frontendCycleMs: performance.now() - cycleStarted });
       }
       if (scanTimeoutRef.current) { clearTimeout(scanTimeoutRef.current); scanTimeoutRef.current = null; }
       if (scanAbortRef.current === controller) scanAbortRef.current = null;
@@ -377,9 +394,10 @@ export const TeacherLiveAttendancePage: React.FC = () => {
     let cancelled = false;
     const tick = async () => {
       const startedAt = performance.now();
-      if (lastScanStartedAtRef.current !== null) setStartToStartMs(startedAt - lastScanStartedAtRef.current);
+      startIntervalMsRef.current = lastScanStartedAtRef.current !== null ? startedAt - lastScanStartedAtRef.current : null;
+      if (startIntervalMsRef.current !== null) setStartToStartMs(startIntervalMsRef.current);
       lastScanStartedAtRef.current = startedAt;
-      const outcome = await scanFrame();
+      const outcome = await scanFrame(startedAt);
       if (cancelled || !mountedRef.current || !streamRef.current) return;
       const processingMs = performance.now() - startedAt;
       const delayMs = outcome.holdResult
@@ -520,8 +538,8 @@ export const TeacherLiveAttendancePage: React.FC = () => {
             {import.meta.env.DEV && <p>Target start interval: {SCAN_TARGET_PERIOD_MS} ms · minimum idle: {SCAN_MIN_IDLE_MS} ms</p>}
             {import.meta.env.DEV && <p>PERFORMANCE</p>}
             {import.meta.env.DEV && performanceMetrics && <div className="font-mono text-[10px] space-y-0.5">
-              <p>Scan rate {startToStartMs ? scanRatePerSecond(startToStartMs).toFixed(2) : '—'} /s · cycle {performanceMetrics.cycleMs.toFixed(0)} ms · start interval {startToStartMs?.toFixed(0) ?? '—'} ms</p>
-              <p>Capture {performanceMetrics.captureMs.toFixed(1)} ms · encode {performanceMetrics.encodeMs.toFixed(1)} ms · request {performanceMetrics.requestMs.toFixed(1)} ms</p>
+              <p>Scan rate {startToStartMs ? scanRatePerSecond(startToStartMs).toFixed(2) : '—'} /s · cycle {performanceMetrics.frontendCycleMs.toFixed(0)} ms · start interval {startToStartMs?.toFixed(0) ?? '—'} ms</p>
+              <p>Capture/draw {performanceMetrics.captureDrawMs.toFixed(1)} ms · toBlob wait {performanceMetrics.toBlobWaitMs.toFixed(1)} ms · request {performanceMetrics.requestLatencyMs.toFixed(1)} ms</p>
               <p>Backend {lastTelemetry?.backend_total_ms?.toFixed(1) ?? '—'} ms · detector {lastTelemetry?.timings_ms?.detection?.toFixed(1) ?? '—'} ms · SFace {lastTelemetry?.timings_ms?.embedding?.toFixed(1) ?? '—'} ms</p>
               <p>Blob {performanceMetrics.blobBytes} bytes · source {performanceMetrics.sourceWidth}×{performanceMetrics.sourceHeight} · sent {performanceMetrics.submittedWidth}×{performanceMetrics.submittedHeight}</p>
               <p>Faces {lastTelemetry?.detection_count ?? faces.length} · track {faces.find((face) => face.trackId !== null)?.trackId ?? '—'} · evidence {faces.find((face) => face.trackId !== null)?.evidenceCount ?? '—'} · liveness {faces.find((face) => face.trackId !== null)?.liveness ?? '—'}</p>

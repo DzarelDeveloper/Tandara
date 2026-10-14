@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field, model_validator
 from ..config import settings
 from ..database import get_db
-from ..main import Attendance, AttendanceSession, ManualIn, Patch, Student, attendance_out, audit, broadcast, localnow, require, user_dep
+from ..main import Attendance, AttendanceSession, ManualIn, Patch, Student, attendance_out, audit, broadcast, localnow, require
 from ..models import AttendanceSchedule
 from ..services.attendance_schedule import get_schedule, recalculate_today
 from ..services.face_recognition import face_recognition_service
@@ -46,7 +46,7 @@ def take(db,student_id,mode,method,user,confidence=None,notes=None):
  if not s or not s.is_active:fail(404,'Siswa aktif tidak ditemukan.')
  schedule=get_schedule(db)
  now=localnow()
- a=db.scalar(select(Attendance).where(Attendance.student_id==student_id,Attendance.attendance_date==localnow().date()))
+ a=db.scalar(select(Attendance).where(Attendance.student_id==student_id,Attendance.attendance_date==now.date()))
  if mode=='CHECK_IN':
   if a and a.check_in_time:fail(409,'Siswa sudah melakukan check-in.')
   if not a:a=Attendance(student_id=student_id,attendance_date=now.date(),status='PRESENT',created_by=user.id);db.add(a)
@@ -62,7 +62,7 @@ def take(db,student_id,mode,method,user,confidence=None,notes=None):
 
 
 @router.get('/api/attendance/settings')
-def attendance_settings(db:Session=Depends(get_db),u=Depends(user_dep)):
+def attendance_settings(db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
  return {'success':True,'data':get_schedule(db)}
 
 
@@ -114,7 +114,7 @@ async def scan(request: Request, session_id: int = Form(...), image: UploadFile 
   results = face_recognition_service.recognize_image_many(content, db, session_id=session.id)
   if len(results) == 1 and (results[0].status != 'RECOGNIZED' or results[0].student_id is None):
     result = results[0]
-    result.telemetry.setdefault('timings_ms', {}).update({'attendance_write': 0.0, 'realtime_publish': 0.0})
+    result.telemetry.setdefault('timings_ms', {}).update({'attendance_write': None, 'realtime_publish': None})
     result.telemetry['backend_total_ms'] = (time.perf_counter() - scan_started) * 1000
     result.telemetry['timings_ms']['backend_total'] = result.telemetry['backend_total_ms']
     logger.info('Face scan rejected status=%s total_ms=%.2f', result.status, result.timings_ms.get('total', 0.0))
@@ -165,7 +165,7 @@ async def scan(request: Request, session_id: int = Form(...), image: UploadFile 
   legacy_result = None
 
   for result in results:
-    result.telemetry.setdefault('timings_ms', {}).update({'attendance_write': 0.0, 'realtime_publish': 0.0})
+    result.telemetry.setdefault('timings_ms', {}).update({'attendance_write': None, 'realtime_publish': None})
     face_payload = {
       'trackId': result.track_id,
       'status': result.status,
@@ -357,4 +357,4 @@ async def correct_attendance(id:int,body:Patch,db:Session=Depends(get_db),u=Depe
  if before!=(a.status,a.check_in_time,a.check_out_time):notifications=notification_service.create_for_student(db,student=a.student,notification_type='ATTENDANCE_CORRECTED',title='Data presensi diperbarui',message=f'Data presensi {a.student.full_name} telah diperbarui oleh petugas.',payload={'attendance_id':a.id,'status':a.status})
  audit(db,u,'CORRECT','Attendance',a.id,body.notes);db.commit();await publish_parent_notifications(notifications);await broadcast('ATTENDANCE_CORRECTED',{'attendance_id':a.id,'student_id':a.student_id,'status':a.status});return {'success':True,'data':attendance_out(a)}
 @router.get('/api/attendance/summary')
-def summary(db:Session=Depends(get_db),u=Depends(user_dep)):return {'success':True,'data':{'today':db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date==localnow().date())) or 0,'students':db.scalar(select(func.count()).select_from(Student).where(Student.is_active==True)) or 0}}
+def summary(db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):return {'success':True,'data':{'today':db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date==localnow().date())) or 0,'students':db.scalar(select(func.count()).select_from(Student).where(Student.is_active==True)) or 0}}
