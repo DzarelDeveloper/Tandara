@@ -2,7 +2,7 @@ import logging
 import time
 from threading import Lock
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from datetime import date, time as datetime_time
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
@@ -95,10 +95,11 @@ async def publish_parent_notifications(rows):
 async def manual(body:ManualIn,db:Session=Depends(get_db),u=Depends(require('ADMIN_IT','GURU_PIKET'))):
  a=take(db,body.student_id,body.mode,'MANUAL',u,notes=body.reason);notifications=notification_service.attendance_transition(db,a,body.mode);audit(db,u,'MANUAL_ATTENDANCE','Attendance',a.id,body.reason);db.commit();await publish_parent_notifications(notifications);await broadcast('ATTENDANCE_SUCCESS',{'attendance_id':a.id,'recorded_at':localnow().isoformat(),'status':a.status,'student_id':a.student_id,'student_name':a.student.full_name,'nis':a.student.nis,'class_name':a.student.classroom.name,'mode':body.mode,'confidence':None});return {'success':True,'data':attendance_out(a)}
 @router.post('/api/attendance/scan')
-async def scan(session_id: int = Form(...), image: UploadFile = File(...), benchmark: bool = Form(False), db: Session = Depends(get_db), u=Depends(require('ADMIN_IT', 'GURU_PIKET'))):
+async def scan(request: Request, session_id: int = Form(...), image: UploadFile = File(...), db: Session = Depends(get_db), u=Depends(require('ADMIN_IT', 'GURU_PIKET'))):
+  legacy_fields = await request.form()
+  if any(str(value).strip().lower() in {'true', '1', 'yes', 'on'} for value in legacy_fields.getlist('benchmark')):
+    fail(422, 'Benchmark mode is no longer supported.', 'BENCHMARK_NOT_SUPPORTED')
   scan_started = time.perf_counter()
-  if benchmark and settings.app_env == 'production':
-    fail(403, 'Benchmark mode is available only in development.', 'BENCHMARK_NOT_ALLOWED')
   session = db.get(AttendanceSession, session_id)
   if not session or session.status != 'ACTIVE' or session.session_date.date() != localnow().date():
     fail(422, 'Sesi absensi tidak aktif.', 'SESSION_NOT_ACTIVE')
@@ -226,16 +227,6 @@ async def scan(session_id: int = Form(...), image: UploadFile = File(...), bench
       faces_payload.append(face_payload)
       continue
 
-    if benchmark:
-      face_payload.update({
-        'status': 'BENCHMARK_READY',
-        'benchmarkReady': True,
-        'attendanceStatus': 'NOT_RECORDED',
-        'message': 'Identity and liveness gates passed; attendance was not saved.',
-      })
-      faces_payload.append(face_payload)
-      continue
-
     attendance_write_started = time.perf_counter()
     student = db.get(Student, result.student_id)
     if not student or not student.is_active:
@@ -340,7 +331,6 @@ async def scan(session_id: int = Form(...), image: UploadFile = File(...), bench
   else:
     response_data = {'faces': faces_payload, 'attendances': attendance_records}
   response_data['livenessMode'] = 'PASSIVE' if settings.face_liveness_enabled else 'MANUAL_ONLY'
-  response_data['benchmarkMode'] = benchmark
   backend_total_ms = (time.perf_counter() - scan_started) * 1000
   for result in results:
     result.telemetry['backend_total_ms'] = backend_total_ms

@@ -92,13 +92,11 @@ export interface TrackedFace {
   similarity: number | null;
   studentName?: string;
   attendanceStatus?: 'RECORDED' | 'ALREADY_RECORDED' | 'NOT_RECORDED';
-  benchmarkReady?: boolean;
   telemetry?: FaceScanTelemetry;
 }
 
 export interface MultiFaceScanResult {
   livenessMode: 'PASSIVE' | 'MANUAL_ONLY';
-  benchmarkMode?: boolean;
   faces: TrackedFace[];
   attendances: FaceScanResult[];
 }
@@ -273,11 +271,10 @@ export const attendanceService = {
     await apiRequest(`/api/attendance-sessions/${sessionId}/close`, { method: 'POST' });
   },
 
-  async scanFrame(sessionId: string, frame: Blob, signal?: AbortSignal, benchmark = false): Promise<MultiFaceScanResult> {
+  async scanFrame(sessionId: string, frame: Blob, signal?: AbortSignal): Promise<MultiFaceScanResult> {
     const body = new FormData();
     body.append('session_id', sessionId);
     body.append('image', frame, 'frame.jpg');
-    if (benchmark) body.append('benchmark', 'true');
     return apiRequest<MultiFaceScanResult>('/api/attendance/scan', { method: 'POST', body, signal });
   },
 
