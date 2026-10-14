@@ -1,50 +1,103 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertCircle, ArrowRight, CheckCircle2, Clock, Video, XCircle } from 'lucide-react';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { StartSessionModal } from '../../components/teacher/StartSessionModal';
 import { useAuth } from '../../context/AuthContext';
 import { attendanceService } from '../../services/attendance.service';
-import { dashboardService, TeacherDashboardStats } from '../../services/dashboard.service';
+import { dashboardService } from '../../services/dashboard.service';
+import { TeacherDashboardController, TeacherDashboardState } from '../../services/teacher-dashboard-controller';
 import { StatCard } from '../../components/ui/StatCard';
 
-const jakartaDate = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date());
+const formatJakartaDate = (date: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(date);
+const getJakartaGreeting = (date: Date) => {
+  const hour = Number(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Jakarta',
+    hour: '2-digit',
+    hourCycle: 'h23',
+  }).format(date));
+  if (hour < 11) return 'Selamat pagi';
+  if (hour < 15) return 'Selamat siang';
+  if (hour < 19) return 'Selamat sore';
+  return 'Selamat malam';
+};
 
 export const TeacherDashboardPage: React.FC = () => {
   const { session } = useAuth();
   const [showSessionModal, setShowSessionModal] = useState(false);
-  const [attendanceDate] = useState(jakartaDate);
-  const [stats, setStats] = useState<TeacherDashboardStats | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const loadStats = useCallback(async () => {
-    setIsLoading(true);
-    setLoadError(null);
-    try {
-      setStats(await dashboardService.teacher(attendanceDate));
-    } catch (error) {
-      setStats(null);
-      setLoadError(error instanceof Error ? error.message : 'Gagal memuat statistik kehadiran.');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [attendanceDate]);
-
-  useEffect(() => { void loadStats(); }, [loadStats]);
+  const [clock, setClock] = useState(() => new Date());
+  const [dashboard, setDashboard] = useState<TeacherDashboardState>({
+    stats: null,
+    isLoading: true,
+    error: null,
+  });
+  const controllerRef = useRef<TeacherDashboardController | null>(null);
+  const attendanceDate = formatJakartaDate(clock);
+  const { stats, isLoading, error: loadError } = dashboard;
 
   useEffect(() => {
-    const cleanup = attendanceService.subscribe?.((message: { event: string }) => {
-      if (['ATTENDANCE_SUCCESS', 'ATTENDANCE_CORRECTED', 'SESSION_OPENED', 'SESSION_CLOSED'].includes(message.event)) {
-        void loadStats();
-      }
-    });
-    return typeof cleanup === 'function' ? cleanup : undefined;
-  }, [loadStats]);
+    const timer = window.setInterval(() => setClock(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
-  const currentDate = new Intl.DateTimeFormat('id-ID', {
-    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Jakarta',
-  }).format(new Date(`${attendanceDate}T12:00:00+07:00`));
+  useEffect(() => {
+    let disconnected = false;
+    let pollTimer: number | null = null;
+    const controller = new TeacherDashboardController(
+      (signal) => dashboardService.teacher(attendanceDate, signal),
+      setDashboard,
+    );
+    controllerRef.current = controller;
+
+    const stopPolling = () => {
+      if (pollTimer !== null) {
+        window.clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    };
+    const startPolling = () => {
+      if (pollTimer !== null || document.visibilityState !== 'visible') return;
+      pollTimer = window.setInterval(() => {
+        void controller.refreshIfIdle();
+      }, 5_000);
+    };
+    const unsubscribe = attendanceService.subscribeWithDisconnect(
+      (message) => { void controller.handleEvent(message.event); },
+      (isDisconnected) => {
+        disconnected = isDisconnected;
+        if (isDisconnected) {
+          startPolling();
+        } else {
+          stopPolling();
+          void controller.refresh();
+        }
+      },
+    );
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        stopPolling();
+      } else {
+        void controller.refresh();
+        if (disconnected) startPolling();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    void controller.refresh(true);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      stopPolling();
+      unsubscribe();
+      controller.dispose();
+      if (controllerRef.current === controller) controllerRef.current = null;
+    };
+  }, [attendanceDate]);
+
+  const currentDate = useMemo(() => new Intl.DateTimeFormat('id-ID', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jakarta', hourCycle: 'h23',
+  }).format(clock), [clock]);
+  const greeting = getJakartaGreeting(clock);
 
   const values = [
     { label: 'Hadir', value: stats?.presentToday ?? 0, icon: CheckCircle2, color: 'text-emerald-600' },
@@ -72,7 +125,7 @@ export const TeacherDashboardPage: React.FC = () => {
   return (
     <div className="space-y-6">
       <PageHeader
-        title={`Selamat pagi, ${session?.displayName || 'Guru Piket'}`}
+        title={`${greeting}, ${session?.displayName || 'Guru Piket'}`}
         subtitle={currentDate}
         actions={<button type="button" onClick={() => setShowSessionModal(true)} className="t-button-primary"><Video className="w-4 h-4" /> Mulai Absensi</button>}
       />
@@ -80,7 +133,7 @@ export const TeacherDashboardPage: React.FC = () => {
       {loadError && (
         <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
           <p className="text-sm text-red-800">Statistik kehadiran tidak dapat dimuat: {loadError}</p>
-          <button type="button" onClick={() => void loadStats()} disabled={isLoading} className="rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-semibold text-red-800 disabled:opacity-50">
+          <button type="button" onClick={() => void controllerRef.current?.refresh(true)} disabled={isLoading} className="rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-semibold text-red-800 disabled:opacity-50">
             Coba lagi
           </button>
         </div>
