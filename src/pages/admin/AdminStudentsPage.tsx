@@ -173,7 +173,7 @@ export const AdminStudentsPage: React.FC = () => {
               className="inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors focus:ring-2 focus:ring-slate-400 focus:outline-none"
             >
               <UploadCloud className="w-4 h-4 text-slate-500" />
-              Impor Data
+              Import Excel
             </button>
             <button
               type="button"

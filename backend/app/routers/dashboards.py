@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select, func
@@ -38,9 +38,11 @@ def admin_dashboard(db: Session = Depends(get_db), u=Depends(require('ADMIN_IT')
 
 
 @router.get('/api/dashboard/teacher')
-def teacher_dashboard(db: Session = Depends(get_db), u=Depends(require('ADMIN_IT', 'GURU_PIKET'))):
-    today = localnow().date(); students = db.scalar(select(func.count()).select_from(Student).where(Student.is_active == True)) or 0
-    records = db.scalars(select(Attendance).where(Attendance.attendance_date == today).order_by(Attendance.updated_at.desc()).limit(10)).all()
+def teacher_dashboard(attendance_date: date | None = None, db: Session = Depends(get_db), u=Depends(require('ADMIN_IT', 'GURU_PIKET'))):
+    selected_date = attendance_date or localnow().date()
+    today = localnow().date()
+    students = db.scalar(select(func.count()).select_from(Student).where(Student.is_active == True)) or 0
+    records = db.scalars(select(Attendance).where(Attendance.attendance_date == selected_date).order_by(Attendance.updated_at.desc()).limit(10)).all()
     day_start = localnow().replace(hour=0, minute=0, second=0, microsecond=0)
     next_day = day_start + timedelta(days=1)
     active = db.scalar(select(AttendanceSession).where(
@@ -48,5 +50,12 @@ def teacher_dashboard(db: Session = Depends(get_db), u=Depends(require('ADMIN_IT
         AttendanceSession.session_date >= day_start,
         AttendanceSession.session_date < next_day,
     ).order_by(AttendanceSession.opened_at.desc()))
-    present = sum(r.status in ('PRESENT', 'LATE') for r in records)
-    return {'success': True, 'data': {'session': None if not active else {'id': str(active.id), 'mode': active.mode, 'cameraSource': active.camera_source, 'status': active.status}, 'presentToday': db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date == today, Attendance.status.in_(['PRESENT', 'LATE']))) or 0, 'lateToday': db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date == today, Attendance.status == 'LATE')) or 0, 'excusedToday': db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date == today, Attendance.status.in_(['SICK', 'EXCUSED']))) or 0, 'notPresent': max(0, students - (db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date == today)) or 0)), 'recentAttendance': [attendance_out(x) for x in records], 'faceEngine': face_engine.status.value}}
+    return {'success': True, 'data': {
+        'session': None if not active else {'id': str(active.id), 'mode': active.mode, 'cameraSource': active.camera_source, 'status': active.status},
+        'presentToday': db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date == selected_date, Attendance.status == 'PRESENT')) or 0,
+        'lateToday': db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date == selected_date, Attendance.status == 'LATE')) or 0,
+        'excusedToday': db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date == selected_date, Attendance.status.in_(['SICK', 'EXCUSED']))) or 0,
+        'notPresent': max(0, students - (db.scalar(select(func.count()).select_from(Attendance).where(Attendance.attendance_date == selected_date)) or 0)),
+        'recentAttendance': [attendance_out(x) for x in records],
+        'faceEngine': face_engine.status.value,
+    }}
